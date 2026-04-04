@@ -62,7 +62,7 @@ let isPinching = false;
 // Worker management
 let currentWorker = null;
 let workerTimeout = null;
-const WORKER_TIMEOUT_MS = 120000; // 2 minutes
+const WORKER_TIMEOUT_MS = 300000; // 5 minutes
 const LARGE_CODE_DISPLAY_LIMIT = 200000; // Characters above which textarea display is truncated
 
 // ─── Image file validation ─────────────────────────────────────────────────
