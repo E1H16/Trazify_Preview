@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trazify</title>
+    <link rel="icon" href="TrazifyLogo.png" type="image/png">
+    <link rel="stylesheet" href="style(1).css">
+</head>
+
+<body onload="init()">
+    <canvas id="previewCanvas"></canvas>
+    <textarea id="outputField" disabled placeholder="Track code output..."></textarea>
+
+    <div id="sidebar">
+        <div id="sidebarHeader">
+            <h1 id="mainTitle">Trazify</h1>
+            <p id="subtitle">Professional Track Code Generator</p>
+        </div>
+        
+        <div id="description">
+            <p>Transform images into FreeRiderHD track codes with precision and ease using advanced conversion algorithms.</p>
+        </div>
+
+        <div id="controls">
+            <input type="file" id="uploadButton" accept="image/*" multiple>
+            <div id="actionRow" style="display: flex; gap: 0.618rem;">
+                <button class="primary-btn" style="flex: 2;" onclick="genTrackFromImageData()">Generate</button>
+                <button class="secondary-btn" style="flex: 1;" onclick="copyToClipboard()">Copy</button>
+                <button class="secondary-btn" style="flex: 1;" onclick="resetProject()">Reset</button>
+            </div>
+        </div>
+        
+        <div id="settingsContainer">
+            <div class="settings-header">
+                <h2>Settings</h2>
+            </div>
+            <div id="generalSettings"></div>
+
+            <div id="imagesSection" style="display:none; border-top: 1px solid rgba(255, 255, 255, 0.04); margin-top: 1rem; padding-top: 1rem;">
+                <h3 style="font-size: 0.95rem; margin-bottom: 0.618rem;">Images Loaded</h3>
+                <div id="imageGallery" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(60px, 1fr)); gap: 0.618rem; margin-bottom: 0.809rem;"></div>
+            </div>
+
+            <div id="objectsSection">
+                <div style="border-top: 1px solid rgba(255, 255, 255, 0.04); margin-top: 1rem; padding-top: 1rem; margin-bottom: 0.618rem;">
+                    <h3 style="font-size: 0.95rem; margin-bottom: 0.809rem;">Objects</h3>
+                </div>
+                <div id="objectsList"></div>
+            </div>
+        </div>
+
+        <div id="sidebarFooter">
+            <div class="credits-container">
+                <p class="credit-text">Based on <a href="https://github.com/ObeyLordGoomy/frhd.js" target="_blank">frhd.js</a> · <a href="https://github.com/Logboy2000/IMG2FRHD" target="_blank">Source</a></p>
+                <hr class="credit-divider">
+                <p class="credit-text">Developed by <a href="https://www.freeriderhd.com/u/e1h" target="_blank" class="shiny-link">E1H</a></p>
+            </div>
+        </div>
+    </div>
+    <script src="frhd(1).js"></script>
+    <script src="index(1).js"></script>
+
+</body>
+
+</html>
