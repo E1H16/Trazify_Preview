@@ -263,8 +263,8 @@ self.onmessage = async function (e) {
         const totalImages = imageDataArrays.length;
 
         // Maximum total track objects across all images before stopping.
-        // High because adaptive step already prevents runaway counts.
-        const MAX_TOTAL_OBJECTS = 500000;
+        // Ultra gets a much higher ceiling so the full image is always covered.
+        const MAX_TOTAL_OBJECTS = qualityLevel === 1 ? 1500000 : 500000;
 
         // Quality-dependent white-pixel brightness threshold (RGB sum).
         // Ultra uses 750 (avg > 250) to capture subtle near-white shading;
@@ -296,7 +296,7 @@ self.onmessage = async function (e) {
             }
 
             // Density-based adaptive step
-            const maxBudget = [500000, 120000, 60000, 30000][qualityLevel - 1];
+            const maxBudget = [1500000, 120000, 60000, 30000][qualityLevel - 1];
             const budgetRemaining = Math.max(maxBudget - totalObjects, 10000);
 
             let estimated;
@@ -311,13 +311,13 @@ self.onmessage = async function (e) {
                 estimated = estimateNonWhitePixels(imgData, step, whiteThreshold);
             }
 
-            // Density-based step increase — skipped for Ultra to respect user's quality choice
-            if (qualityLevel > 1) {
-                const estAtStep = Math.ceil(estimated / (step * step));
-                if (estAtStep > budgetRemaining) {
-                    const neededFactor = Math.sqrt(estAtStep / budgetRemaining);
-                    step = Math.max(step, Math.ceil(step * neededFactor));
-                }
+            // Density-based step increase — ensures full image coverage for all quality levels.
+            // For Ultra the budget is very generous so step rarely needs to increase,
+            // but it prevents truncation on extremely dense images.
+            const estAtStep = Math.ceil(estimated / (step * step));
+            if (estAtStep > budgetRemaining) {
+                const neededFactor = Math.sqrt(estAtStep / budgetRemaining);
+                step = Math.max(step, Math.ceil(step * neededFactor));
             }
 
             // Cap step so we don't skip everything
@@ -372,6 +372,7 @@ self.onmessage = async function (e) {
 
                         totalObjects++;
                         if (totalObjects > MAX_TOTAL_OBJECTS) {
+                            hitMax = true;
                             break;
                         }
 
