@@ -4,38 +4,51 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Trazify — Transform images into FreeRiderHD track codes with precision and ease using advanced conversion algorithms.">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <meta property="og:title" content="Trazify — Professional Track Code Generator">
+    <meta property="og:description" content="Transform images into FreeRiderHD track codes with precision and ease using advanced conversion algorithms.">
+    <meta property="og:image" content="assets/TrazifyLogo.png">
+    <meta property="og:type" content="website">
     <title>Trazify</title>
     <link rel="icon" href="assets/TrazifyLogo.png" type="image/png">
+    <link rel="apple-touch-icon" href="assets/TrazifyLogo.png">
+    <link rel="manifest" href="manifest.json">
     <link rel="stylesheet" href="css/style.css">
 </head>
 
-<body onload="init()">
-    <div id="toastContainer"></div>
-    <canvas id="previewCanvas"></canvas>
-    <textarea id="outputField" disabled placeholder="Track code output..."></textarea>
+<body>
+    <div id="toastContainer" role="status" aria-live="polite"></div>
+    <main id="mainContent">
+        <canvas id="previewCanvas" role="img" aria-label="Track preview canvas"></canvas>
+        <textarea id="outputField" disabled placeholder="Track code output..." aria-label="Generated track code output"></textarea>
+    </main>
 
-    <div id="sidebar">
-        <div id="sidebarHeader">
+    <aside id="sidebar">
+        <header id="sidebarHeader">
             <h1 id="mainTitle">Trazify</h1>
             <p id="subtitle">Professional Track Code Generator</p>
-        </div>
+        </header>
         
         <div id="description">
             <p>Transform images into FreeRiderHD track codes with precision and ease using advanced conversion algorithms.</p>
         </div>
 
         <div id="controls">
-            <input type="file" id="uploadButton" accept="image/*" multiple>
-            <div id="actionRow" style="display: flex; gap: 0.618rem;">
-                <button class="primary-btn" style="flex: 2;" onclick="genTrackFromImageData()">Generate</button>
-                <button class="secondary-btn" style="flex: 1;" onclick="copyToClipboard()">Copy</button>
-                <button class="secondary-btn" style="flex: 1;" onclick="resetProject()">Reset</button>
+            <label for="uploadButton" class="upload-label">
+                <input type="file" id="uploadButton" accept="image/*" multiple aria-label="Upload images">
+            </label>
+            <div id="actionRow">
+                <button id="btnGenerate" class="primary-btn" aria-label="Generate track code">Generate</button>
+                <button id="btnCopy" class="secondary-btn" aria-label="Copy track code to clipboard">Copy</button>
+                <button id="btnReset" class="secondary-btn" aria-label="Reset project">Reset</button>
             </div>
-            <div id="progressContainer" style="display:none;">
-                <div id="progressBarTrack">
+            <div id="progressContainer">
+                <div id="progressBarTrack" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
                     <div id="progressBarFill"></div>
                 </div>
                 <span id="progressText">0%</span>
+                <span id="progressDetail" aria-live="polite"></span>
             </div>
         </div>
         
@@ -45,27 +58,27 @@
             </div>
             <div id="generalSettings"></div>
 
-            <div id="imagesSection" style="display:none; border-top: 1px solid rgba(255, 255, 255, 0.04); margin-top: 1rem; padding-top: 1rem;">
-                <h3 style="font-size: 0.95rem; margin-bottom: 0.618rem;">Images Loaded</h3>
-                <div id="imageGallery" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(60px, 1fr)); gap: 0.618rem; margin-bottom: 0.809rem;"></div>
+            <div id="imagesSection" class="settings-section">
+                <h3 class="section-title">Images Loaded</h3>
+                <div id="imageGallery" class="image-gallery"></div>
             </div>
 
             <div id="objectsSection">
-                <div style="border-top: 1px solid rgba(255, 255, 255, 0.04); margin-top: 1rem; padding-top: 1rem; margin-bottom: 0.618rem;">
-                    <h3 style="font-size: 0.95rem; margin-bottom: 0.809rem;">Objects</h3>
+                <div class="section-divider">
+                    <h3 class="section-title">Objects</h3>
                 </div>
                 <div id="objectsList"></div>
             </div>
         </div>
 
-        <div id="sidebarFooter">
+        <footer id="sidebarFooter">
             <div class="credits-container">
-                <p class="credit-text">Based on <a href="https://github.com/ObeyLordGoomy/frhd.js" target="_blank">frhd.js</a> · <a href="https://github.com/Logboy2000/IMG2FRHD" target="_blank">Source</a></p>
+                <p class="credit-text">Based on <a href="https://github.com/ObeyLordGoomy/frhd.js" target="_blank" rel="noopener noreferrer">frhd.js</a> · <a href="https://github.com/Logboy2000/IMG2FRHD" target="_blank" rel="noopener noreferrer">Source</a></p>
                 <hr class="credit-divider">
-                <p class="credit-text">Developed by <a href="https://www.freeriderhd.com/u/e1h" target="_blank" class="shiny-link">E1H</a></p>
+                <p class="credit-text">Developed by <a href="https://www.freeriderhd.com/u/e1h" target="_blank" rel="noopener noreferrer" class="shiny-link">E1H</a></p>
             </div>
-        </div>
-    </div>
+        </footer>
+    </aside>
     <script src="js/frhd.js"></script>
     <script src="js/app.js"></script>
 

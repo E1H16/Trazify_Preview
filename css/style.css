@@ -7,7 +7,8 @@ html {
 }
 
 body {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+    /* System font stack — 'Inter' was removed since it was never loaded via @font-face or CDN */
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
     margin: 0;
     padding: 0;
     background-color: #080b10;
@@ -174,24 +175,36 @@ p { margin: 0.618rem 0; }
     text-transform: uppercase;
 }
 
-#previewCanvas {
+#mainContent {
     position: fixed;
     top: 0;
     left: 38.2%;
     right: 0;
+    bottom: 0;
+}
+
+#previewCanvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
     height: 70%;
-    width: 61.8%;
+    width: 100%;
     background: #f8fafb;
     border: none;
     box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.04);
-    cursor: crosshair;
+    cursor: grab;
+}
+
+#previewCanvas.dragging {
+    cursor: grabbing;
 }
 
 #outputField {
     background-color: #080b10;
     color: #4db8ff;
-    position: fixed;
-    left: 38.2%;
+    position: absolute;
+    left: 0;
     right: 0;
     top: 70%;
     bottom: 0;
@@ -642,20 +655,50 @@ input[type="range"]::-moz-range-thumb {
 
 @media (max-width: 1200px) {
     #sidebar { width: 40%; }
-    #previewCanvas { left: 40%; width: 60%; }
-    #outputField { left: 40%; }
+    #mainContent { left: 40%; }
 }
 
 @media (max-width: 900px) {
     #sidebar { width: 50%; position: relative; }
-    #previewCanvas { left: 50%; width: 50%; }
-    #outputField { left: 50%; }
+    #mainContent { left: 50%; }
 }
 
 @media (max-width: 600px) {
-    #sidebar { width: 100%; bottom: auto; border-right: none; border-bottom: 1px solid rgba(255, 255, 255, 0.05); position: static; }
-    #previewCanvas { left: 0; top: auto; width: 100%; height: 400px; }
-    #outputField { left: 0; top: auto; }
+    #sidebar {
+        width: 100%;
+        bottom: auto;
+        border-right: none;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        position: static;
+    }
+    #mainContent {
+        position: static;
+        left: 0;
+    }
+    #previewCanvas {
+        position: relative;
+        left: 0;
+        top: auto;
+        width: 100%;
+        height: 400px;
+    }
+    #outputField {
+        position: relative;
+        left: 0;
+        top: auto;
+        min-height: 150px;
+    }
+    #actionRow {
+        flex-direction: column;
+    }
+    #actionRow .primary-btn,
+    #actionRow .secondary-btn {
+        flex: none;
+        width: 100%;
+    }
+    body {
+        padding-bottom: env(safe-area-inset-bottom, 0);
+    }
 }
 .image-position-container {
     margin-bottom: 0.618rem;
@@ -767,9 +810,14 @@ input[type="range"]::-moz-range-thumb {
 
 /* Progress bar */
 #progressContainer {
-    display: flex;
+    display: none;
+    flex-wrap: wrap;
     align-items: center;
     gap: 0.618rem;
+}
+
+#progressContainer.visible {
+    display: flex;
 }
 
 #progressBarTrack {
@@ -796,4 +844,79 @@ input[type="range"]::-moz-range-thumb {
     min-width: 32px;
     text-align: right;
     font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+#progressDetail {
+    width: 100%;
+    font-size: 0.72rem;
+    color: #5a6a7e;
+    font-weight: 500;
+    margin-top: -0.3rem;
+}
+
+/* Action row (moved from inline styles) */
+#actionRow {
+    display: flex;
+    gap: 0.618rem;
+}
+
+#actionRow .primary-btn {
+    flex: 2;
+}
+
+#actionRow .secondary-btn {
+    flex: 1;
+}
+
+/* Settings sections (moved from inline styles) */
+.settings-section {
+    display: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.04);
+    margin-top: 1rem;
+    padding-top: 1rem;
+    transition: opacity 0.3s ease;
+}
+
+.settings-section.visible {
+    display: block;
+}
+
+.section-title {
+    font-size: 0.95rem;
+    margin-bottom: 0.618rem;
+}
+
+.section-divider {
+    border-top: 1px solid rgba(255, 255, 255, 0.04);
+    margin-top: 1rem;
+    padding-top: 1rem;
+    margin-bottom: 0.618rem;
+}
+
+/* Image gallery (moved from inline styles) */
+.image-gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+    gap: 0.618rem;
+    margin-bottom: 0.809rem;
+}
+
+/* Upload label styling */
+.upload-label {
+    display: block;
+    padding: 0;
+    cursor: pointer;
+}
+
+/* Zoom indicator overlay */
+.zoom-indicator {
+    position: absolute;
+    bottom: 12px;
+    right: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(0, 0, 0, 0.5);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    pointer-events: none;
+    user-select: none;
 }
