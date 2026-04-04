@@ -545,174 +545,87 @@ function genTrackFromImageData() {
     const originalText = btnGenerate.textContent;
     btnGenerate.textContent = 'Processing...';
     btnGenerate.disabled = true;
+
+    // Show progress bar
+    const progressContainer = document.getElementById('progressContainer');
+    const progressBarFill   = document.getElementById('progressBarFill');
+    const progressText      = document.getElementById('progressText');
+    progressContainer.style.display = 'flex';
+    progressBarFill.style.width = '0%';
+    progressText.textContent = '0%';
+
     outputField.value = 'Generating track code...\n\nQuality: ' + ['Ultra High', 'High', 'Medium', 'Low'][qualityLevel - 1];
 
-    processAllImages();
+    // Build image data arrays to send to worker
+    const imageDataArrays = [];
+    for (let i = 0; i < imageObjects.length; i++) {
+        const imgObj = imageObjects[i];
+        const canvas = document.createElement('canvas');
+        const ctx    = canvas.getContext('2d');
+        canvas.width  = imgObj.width;
+        canvas.height = imgObj.height;
+        ctx.drawImage(imgObj, 0, 0);
+        const imgData = ctx.getImageData(0, 0, imgObj.width, imgObj.height);
+        imageDataArrays.push({
+            data:   imgData.data,
+            width:  imgData.width,
+            height: imgData.height
+        });
+    }
 
-    function processAllImages() {
-        try {
-            const track = new FrhdTrack();
-            let totalProcessedPixels = 0;
-            let currentImageIdx = 0;
-            
-            // Process all images sequentially
-            function processNextImage() {
-                if (currentImageIdx >= imageObjects.length) {
-                    // All images processed
-                    completeProcessing(track, totalProcessedPixels);
-                    return;
-                }
-                
-                const imgObj = imageObjects[currentImageIdx];
-                const imgOffset = imageOffsets[currentImageIdx] || { x: 0, y: 0 };
-                
-                // Create canvas and extract image data for this image
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                canvas.width = imgObj.width;
-                canvas.height = imgObj.height;
-                ctx.drawImage(imgObj, 0, 0);
-                const currentImageData = ctx.getImageData(0, 0, imgObj.width, imgObj.height);
-                
-                // Process this image
-                outputField.value = 'Processing image ' + (currentImageIdx + 1) + ' of ' + imageObjects.length + '...\nQuality: ' + ['Ultra High', 'High', 'Medium', 'Low'][qualityLevel - 1] + '\nTotal objects so far: ' + totalProcessedPixels;
-                processImageChunked(track, currentImageData, imgOffset, currentImageIdx);
-                
-                function processImageChunked(trackObj, imgData, offset, imgIndex) {
-                    // Downsampling determined by quality
-                    let step = qualityLevel;  // 1=Ultra, 2=High, 3=Medium, 4=Low
-                    
-                    // Apply adaptive downsampling in addition to quality
-                    if (imgData.width > 1500 || imgData.height > 1500) step = Math.max(step, 2);
-                    if (imgData.width > 3000 || imgData.height > 3000) step = Math.max(step, 3);
-                    if (imgData.width > 5000 || imgData.height > 5000) step = Math.max(step, 4);
+    // Launch Web Worker
+    const worker = new Worker('js/track-worker.js');
 
-                    let processedPixels = 0;
-                    const CHUNK_SIZE = 50000;
-                    let chunkPixelsProcessed = 0;
-                    let yPos = 0;
+    worker.postMessage({
+        imageDataArrays: imageDataArrays,
+        colorMap:        colorMap,
+        enabledColors:   enabledColors,
+        qualityLevel:    qualityLevel,
+        imageOffsets:    imageOffsets,
+        imageScales:     imageScales,
+        xOffset:         xOffset,
+        yOffset:         yOffset
+    });
 
-                    function processNextChunk() {
-                        const startTime = performance.now();
-                        chunkPixelsProcessed = 0;
-                        
-                        while (yPos < imgData.height) {
-                            for (let x = 0; x < imgData.width; x += step) {
-                                const index = (yPos * imgData.width + x) * 4;
-                                const alpha = imgData.data[index + 3];
-                                if (alpha === 0) continue;
-                                
-                                const red = imgData.data[index];
-                                const green = imgData.data[index + 1];
-                                const blue = imgData.data[index + 2];
-                                
-                                // Skip only near-white pixels (brightness > 240)
-                                // Lower values would skip valid game objects like Stars and Antigravity
-                                const brightness = (red + green + blue) / 3;
-                                if (brightness > 240) continue;
-                                
-                                const closestColor = getClosestColor(red, green, blue);
-                                if (!closestColor) continue;
-                                
-                                processedPixels++;
-                                totalProcessedPixels++;
-                                chunkPixelsProcessed++;
-                                
-                                // Scale limit by quality: Ultra=120K, High=60K, Medium=30K, Low=15K
-                                const maxObjects = [120000, 60000, 30000, 15000][qualityLevel - 1];
-                                if (totalProcessedPixels > maxObjects) {
-                                    outputField.value = 'Image too complex. Reduced detail for stability.\nTotal Objects: ' + totalProcessedPixels;
-                                    completeProcessing(trackObj, totalProcessedPixels);
-                                    return;
-                                }
+    worker.onmessage = function (e) {
+        const msg = e.data;
 
-                                // Calculate track coordinates to match canvas preview
-                                // Canvas draws pixel at: centerX - width/2 + offset.x + xOffset + x
-                                // Spawn is at centerX (= track 0,0)
-                                // So track position = (x - width/2 + offset.x + xOffset) * 2
-                                const imgScale = imageScales[currentImageIdx] || 1.0;
-                                const trackX = ((x - imgData.width / 2) * imgScale + offset.x + xOffset) * 2;
-                                const trackY = ((yPos - imgData.height / 2) * imgScale + offset.y + yOffset) * 2;
-                                
-                                switch (colorMap[closestColor]) {
-                                    case 'White (Strongly recommended)':
-                                        break;
-                                    case 'Bomb':
-                                        trackObj.addBomb(trackX, trackY);
-                                        break;
-                                    case 'Gravity':
-                                        trackObj.addGravity(trackX, trackY);
-                                        break;
-                                    case 'Helicopter':
-                                        trackObj.addVehicle(trackX, trackY, 'heli');
-                                        break;
-                                    case 'Star':
-                                        trackObj.addStar(trackX, trackY);
-                                        break;
-                                    case 'Boost':
-                                        trackObj.addBoost(trackX, trackY);
-                                        break;
-                                    case 'Antigravity':
-                                        trackObj.addAntigravity(trackX, trackY);
-                                        break;
-                                    case 'Checkpoint':
-                                        trackObj.addCheckpoint(trackX, trackY);
-                                        break;
-                                    case 'Teleporter':
-                                        trackObj.addTeleporter(trackX, trackY, (trackX + 2), (trackY + 2));
-                                        break;
-                                    case 'Truck':
-                                        trackObj.addVehicle(trackX, trackY, 'truck');
-                                        break;
-                                    case 'Balloon':
-                                        trackObj.addVehicle(trackX, trackY, 'balloon');
-                                        break;
-                                    case 'Blob':
-                                        trackObj.addVehicle(trackX, trackY, 'blob');
-                                        break;
-                                    case 'PhysicsLine':
-                                        trackObj.addPhysicsLine(trackX, trackY, (trackX + 2), (trackY + 2));
-                                        break;
-                                    case 'SceneryLine':
-                                        trackObj.addSceneryLine(trackX, trackY, (trackX + 2), (trackY + 2));
-                                        break;
-                                }
-                            }
-                            
-                            yPos += step;
-                            
-                            if (chunkPixelsProcessed >= CHUNK_SIZE) {
-                                const elapsed = performance.now() - startTime;
-                                setTimeout(processNextChunk, Math.max(10, 50 - elapsed));
-                                return;
-                            }
-                        }
-                        
-                        // This image is done, move to next
-                        currentImageIdx++;
-                        setTimeout(processNextImage, 10);
-                    }
-                    
-                    processNextChunk();
-                }
-            }
-            
-            processNextImage();
-                    
-        } catch (error) {
-            console.error('Error generating track:', error);
-            outputField.value = 'Error: Failed to generate track code. Try a simpler image.';
+        if (msg.type === 'progress') {
+            const pct = Math.min(msg.percent, 100);
+            progressBarFill.style.width = pct + '%';
+            progressText.textContent = pct + '%';
+            outputField.value = 'Processing image ' + (msg.imageIndex + 1) + ' of ' + msg.totalImages +
+                '...\nQuality: ' + ['Ultra High', 'High', 'Medium', 'Low'][qualityLevel - 1] +
+                '\nTotal objects so far: ' + msg.objectCount;
+        } else if (msg.type === 'complete') {
+            trackString = msg.code;
+            outputField.value = 'Track Generated!\nTotal Objects: ' + msg.objectCount + '\n\n' + trackString;
             btnGenerate.textContent = originalText;
             btnGenerate.disabled = false;
+            progressBarFill.style.width = '100%';
+            progressText.textContent = '100%';
+            setTimeout(function () { progressContainer.style.display = 'none'; }, 1500);
+            worker.terminate();
+        } else if (msg.type === 'error') {
+            console.error('Worker error:', msg.message);
+            outputField.value = 'Error: ' + msg.message;
+            showToast('Generation failed: ' + msg.message, 'error');
+            btnGenerate.textContent = originalText;
+            btnGenerate.disabled = false;
+            progressContainer.style.display = 'none';
+            worker.terminate();
         }
-    }
-    
-    function completeProcessing(track, pixelCount) {
-        trackString = track.code;
-        outputField.value = 'Track Generated!\nTotal Objects: ' + pixelCount + '\n\n' + trackString;
+    };
+
+    worker.onerror = function (err) {
+        console.error('Worker error:', err);
+        outputField.value = 'Error: Failed to generate track code. Try a simpler image.';
+        showToast('Generation failed. Check console for details.', 'error');
         btnGenerate.textContent = originalText;
         btnGenerate.disabled = false;
-    }
+        progressContainer.style.display = 'none';
+        worker.terminate();
+    };
 }
 
 function resetProject() {
