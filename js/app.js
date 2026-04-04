@@ -71,9 +71,12 @@ const IMAGE_SIGNATURES = [
     { bytes: [0x89, 0x50, 0x4E, 0x47], type: 'image/png' },       // PNG
     { bytes: [0xFF, 0xD8, 0xFF],        type: 'image/jpeg' },      // JPEG
     { bytes: [0x47, 0x49, 0x46, 0x38],  type: 'image/gif' },       // GIF
-    { bytes: [0x52, 0x49, 0x46, 0x46],  type: 'image/webp' },      // WebP (RIFF)
     { bytes: [0x42, 0x4D],              type: 'image/bmp' },       // BMP
 ];
+
+/** WebP uses RIFF container — requires checking bytes at offset 8-11 for 'WEBP' marker */
+const WEBP_RIFF_HEADER = [0x52, 0x49, 0x46, 0x46];
+const WEBP_MARKER = [0x57, 0x45, 0x42, 0x50]; // 'WEBP' at offset 8
 
 /**
  * Validates an image file by checking its magic bytes.
@@ -82,20 +85,27 @@ const IMAGE_SIGNATURES = [
  */
 function validateImageFile(file) {
     return new Promise(function(resolve) {
-        const reader = new FileReader();
+        var reader = new FileReader();
         reader.onload = function(e) {
-            const arr = new Uint8Array(e.target.result);
-            const isValid = IMAGE_SIGNATURES.some(function(sig) {
+            var arr = new Uint8Array(e.target.result);
+            // Check standard signatures
+            var isValid = IMAGE_SIGNATURES.some(function(sig) {
                 return sig.bytes.every(function(byte, i) {
                     return arr[i] === byte;
                 });
             });
+            // Check WebP: RIFF header at offset 0 + 'WEBP' marker at offset 8
+            if (!isValid && arr.length >= 12) {
+                var isRiff = WEBP_RIFF_HEADER.every(function(byte, i) { return arr[i] === byte; });
+                var isWebp = WEBP_MARKER.every(function(byte, i) { return arr[8 + i] === byte; });
+                isValid = isRiff && isWebp;
+            }
             resolve(isValid);
         };
         reader.onerror = function() {
             resolve(false);
         };
-        reader.readAsArrayBuffer(file.slice(0, 8));
+        reader.readAsArrayBuffer(file.slice(0, 12));
     });
 }
 
@@ -239,13 +249,13 @@ document.addEventListener('DOMContentLoaded', function() {
     qualitySelect.id = 'qualitySelect';
     qualitySelect.style.flex = '1';
 
-    var options = [
+    var qualityOptions = [
         { value: '1', text: 'Ultra High (Slower, Best Detail)' },
         { value: '2', text: 'High (Balanced)', selected: true },
         { value: '3', text: 'Medium (Faster)' },
         { value: '4', text: 'Low (Fastest)' }
     ];
-    options.forEach(function(opt) {
+    qualityOptions.forEach(function(opt) {
         var optEl = document.createElement('option');
         optEl.value = opt.value;
         optEl.textContent = opt.text;
@@ -588,9 +598,12 @@ function updateImagePositioningUI() {
         const container = document.createElement('div');
         container.className = 'image-position-container';
         
+        // Sanitize the file name for display (strip any non-printable characters)
+        const safeName = img.name.replace(/[^\x20-\x7E]/g, '');
+        
         const label = document.createElement('div');
         label.className = 'image-position-label';
-        label.textContent = (index + 1) + '. ' + img.name;
+        label.textContent = (index + 1) + '. ' + safeName;
         container.appendChild(label);
         
         const inputsRow = document.createElement('div');
@@ -605,7 +618,7 @@ function updateImagePositioningUI() {
             const input = document.createElement('input');
             input.type = 'number';
             input.value = imageOffsets[index][axis.toLowerCase()];
-            input.setAttribute('aria-label', img.name + ' ' + axis + ' position');
+            input.setAttribute('aria-label', safeName + ' ' + axis + ' position');
             input.addEventListener('change', function() {
                 imageOffsets[index][axis.toLowerCase()] = parseInt(input.value, 10);
                 updateAndClearPreviewCanvas();
@@ -630,7 +643,7 @@ function updateImagePositioningUI() {
         scaleSlider.step = '0.1';
         scaleSlider.value = imageScales[index] || 1.0;
         scaleSlider.style.flex = '1';
-        scaleSlider.setAttribute('aria-label', img.name + ' scale');
+        scaleSlider.setAttribute('aria-label', safeName + ' scale');
         
         const scaleValue = document.createElement('span');
         scaleValue.textContent = (imageScales[index] || 1.0).toFixed(1) + 'x';
