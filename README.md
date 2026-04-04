@@ -100,4 +100,4 @@ Then open `http://localhost:8000` in your browser.
 
 ---
 
-*Trazify — Transform your creativity into FreeRiderHD tracks*
+*Trazify — Transforming your creativity into FreeRiderHD tracks*
