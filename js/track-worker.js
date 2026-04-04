@@ -7,7 +7,26 @@
  *   - { type: 'progress', percent, objectCount, imageIndex, totalImages }
  *   - { type: 'complete', code, objectCount }
  *   - { type: 'error', message }
+ *
+ * Uses WebAssembly (pixel_processor.wasm) for accelerated pixel classification
+ * when available, with automatic fallback to pure JavaScript.
  */
+
+// ─── WebAssembly loader ─────────────────────────────────────────────────────
+
+let wasm = null;
+
+const wasmReady = (async () => {
+    try {
+        const resp = await fetch('pixel_processor.wasm');
+        if (!resp.ok) throw new Error(resp.statusText);
+        const bytes = await resp.arrayBuffer();
+        const { instance } = await WebAssembly.instantiate(bytes);
+        wasm = instance.exports;
+    } catch (_) {
+        wasm = null; // JS fallback
+    }
+})();
 
 // ─── Optimized FrhdTrack (HashMap-based addLine) ────────────────────────────
 
@@ -217,7 +236,10 @@ function estimateNonWhitePixels(imgData, sampleStep) {
 
 // ─── Main message handler ───────────────────────────────────────────────────
 
-self.onmessage = function (e) {
+self.onmessage = async function (e) {
+    // Ensure Wasm has finished loading (or failing) before processing
+    await wasmReady;
+
     try {
         const {
             imageDataArrays,   // [{ data, width, height }, ...]
@@ -244,6 +266,15 @@ self.onmessage = function (e) {
         // we use adaptive step to prevent runaway counts
         const ABSOLUTE_MAX = 500000;
 
+        // Build flat RGB array for the color palette (used by both Wasm and JS paths)
+        const colorNames = colorLookup.map(c => c.name);
+        const colorsFlat = new Uint8Array(colorLookup.length * 3);
+        for (let i = 0; i < colorLookup.length; i++) {
+            colorsFlat[i * 3]     = colorLookup[i].r;
+            colorsFlat[i * 3 + 1] = colorLookup[i].g;
+            colorsFlat[i * 3 + 2] = colorLookup[i].b;
+        }
+
         for (let imgIdx = 0; imgIdx < totalImages; imgIdx++) {
             const imgData = imageDataArrays[imgIdx];
             const offset  = imageOffsets[imgIdx] || { x: 0, y: 0 };
@@ -257,13 +288,22 @@ self.onmessage = function (e) {
             if (imgData.width > 3000 || imgData.height > 3000) step = Math.max(step, 3);
             if (imgData.width > 5000 || imgData.height > 5000) step = Math.max(step, 4);
 
-            // Density-based adaptive step — estimate how many objects
-            // this image will produce, and increase step until it fits
-            // within the budget so the ENTIRE image is processed.
+            // Density-based adaptive step
             const maxBudget = [200000, 120000, 60000, 30000][qualityLevel - 1];
             const budgetRemaining = Math.max(maxBudget - totalObjects, 10000);
 
-            const estimated = estimateNonWhitePixels(imgData, step);
+            let estimated;
+            if (wasm) {
+                // Use Wasm for density estimation
+                const pixelSize = imgData.data.length;
+                const pxPtr = wasm.wasm_alloc(pixelSize);
+                new Uint8Array(wasm.memory.buffer, pxPtr, pixelSize).set(imgData.data);
+                estimated = wasm.estimate_density(pxPtr, imgData.width, imgData.height, step);
+                wasm.wasm_dealloc(pxPtr, pixelSize);
+            } else {
+                estimated = estimateNonWhitePixels(imgData, step);
+            }
+
             const estAtStep = Math.ceil(estimated / (step * step));
             if (estAtStep > budgetRemaining) {
                 const neededFactor = Math.sqrt(estAtStep / budgetRemaining);
@@ -274,72 +314,134 @@ self.onmessage = function (e) {
             step = Math.min(step, Math.max(Math.floor(Math.min(imgData.width, imgData.height) / 8), 1));
 
             // ── Process pixels ──────────────────────────────────────────
-            const totalRows = Math.ceil(imgData.height / step);
-            let rowsDone = 0;
-            const progressInterval = Math.max(Math.floor(totalRows / 50), 1);
+            if (wasm) {
+                // ─── Wasm path: batch rows for progress reporting ───────
+                const ROWS_PER_BATCH = 100;
+                const pixelSize  = imgData.data.length;
+                const colorsSize = colorsFlat.length;
+                const maxPerBatch = Math.ceil(imgData.width / step) * ROWS_PER_BATCH;
+                const resultSize = maxPerBatch * 3 * 8; // 3 × f64 per result
 
-            for (let y = 0; y < imgData.height; y += step) {
-                for (let x = 0; x < imgData.width; x += step) {
-                    const idx = (y * imgData.width + x) * 4;
-                    const alpha = imgData.data[idx + 3];
-                    if (alpha === 0) continue;
+                // Allocate Wasm memory for pixel data, colors, and results
+                const pxPtr  = wasm.wasm_alloc(pixelSize);
+                const clrPtr = wasm.wasm_alloc(colorsSize);
+                const resPtr = wasm.wasm_alloc(resultSize);
 
-                    const r = imgData.data[idx];
-                    const g = imgData.data[idx + 1];
-                    const b = imgData.data[idx + 2];
+                // Copy pixel data and color palette into Wasm memory
+                new Uint8Array(wasm.memory.buffer, pxPtr, pixelSize).set(imgData.data);
+                new Uint8Array(wasm.memory.buffer, clrPtr, colorsSize).set(colorsFlat);
 
-                    if ((r + g + b) / 3 > 240) continue;
+                const halfW = imgData.width / 2;
+                const halfH = imgData.height / 2;
+                const combinedOffX = offset.x + xOffset;
+                const combinedOffY = offset.y + yOffset;
+                const totalRows = Math.ceil(imgData.height / step);
+                let rowsDone = 0;
+                const progressInterval = Math.max(Math.floor(totalRows / 50), 1);
+                let hitMax = false;
 
-                    const match = getClosestColor(r, g, b, colorLookup);
-                    if (!match) continue;
+                for (let yStart = 0; yStart < imgData.height && !hitMax; yStart += ROWS_PER_BATCH * step) {
+                    const yEnd = Math.min(yStart + ROWS_PER_BATCH * step, imgData.height);
 
-                    totalObjects++;
+                    const count = wasm.process_pixels(
+                        pxPtr, imgData.width, imgData.height, step,
+                        yStart, yEnd,
+                        clrPtr, colorLookup.length,
+                        scale, halfW, halfH, combinedOffX, combinedOffY,
+                        resPtr, maxPerBatch
+                    );
 
-                    if (totalObjects > ABSOLUTE_MAX) {
-                        // Graceful stop — image is already mostly done
-                        self.postMessage({ type: 'progress', percent: 100, objectCount: totalObjects, imageIndex: imgIdx, totalImages });
-                        self.postMessage({ type: 'complete', code: track.code, objectCount: totalObjects });
-                        return;
+                    // Read results — re-create view in case memory grew
+                    const results = new Float64Array(wasm.memory.buffer, resPtr, count * 3);
+
+                    for (let i = 0; i < count * 3; i += 3) {
+                        const colorIdx = results[i];
+                        const trackX   = results[i + 1];
+                        const trackY   = results[i + 2];
+
+                        totalObjects++;
+                        if (totalObjects > ABSOLUTE_MAX) {
+                            hitMax = true;
+                            break;
+                        }
+
+                        addResultToTrack(track, colorNames[colorIdx], trackX, trackY);
                     }
 
-                    const trackX = ((x - imgData.width / 2) * scale + offset.x + xOffset) * 2;
-                    const trackY = ((y - imgData.height / 2) * scale + offset.y + yOffset) * 2;
-
-                    switch (match.name) {
-                        case 'White (Strongly recommended)': break;
-                        case 'PhysicsLine':
-                            track.addPhysicsLine(trackX, trackY, trackX + 2, trackY + 2);
-                            break;
-                        case 'SceneryLine':
-                            track.addSceneryLine(trackX, trackY, trackX + 2, trackY + 2);
-                            break;
-                        case 'Bomb':          track.addBomb(trackX, trackY);          break;
-                        case 'Gravity':       track.addGravity(trackX, trackY);       break;
-                        case 'Star':          track.addStar(trackX, trackY);          break;
-                        case 'Boost':         track.addBoost(trackX, trackY);         break;
-                        case 'Antigravity':   track.addAntigravity(trackX, trackY);   break;
-                        case 'Checkpoint':    track.addCheckpoint(trackX, trackY);    break;
-                        case 'Teleporter':
-                            track.addTeleporter(trackX, trackY, trackX + 2, trackY + 2);
-                            break;
-                        case 'Helicopter':    track.addVehicle(trackX, trackY, 'heli');    break;
-                        case 'Truck':         track.addVehicle(trackX, trackY, 'truck');   break;
-                        case 'Balloon':       track.addVehicle(trackX, trackY, 'balloon'); break;
-                        case 'Blob':          track.addVehicle(trackX, trackY, 'blob');    break;
+                    // Progress reporting
+                    const batchRows = Math.ceil((yEnd - yStart) / step);
+                    rowsDone += batchRows;
+                    if (rowsDone % progressInterval < batchRows || hitMax) {
+                        const imgProgress = Math.min(rowsDone / totalRows, 1);
+                        const overallPercent = Math.round(((imgIdx + imgProgress) / totalImages) * 100);
+                        self.postMessage({
+                            type: 'progress',
+                            percent: overallPercent,
+                            objectCount: totalObjects,
+                            imageIndex: imgIdx,
+                            totalImages: totalImages
+                        });
                     }
                 }
 
-                rowsDone++;
-                if (rowsDone % progressInterval === 0) {
-                    const imgProgress = rowsDone / totalRows;
-                    const overallPercent = Math.round(((imgIdx + imgProgress) / totalImages) * 100);
-                    self.postMessage({
-                        type: 'progress',
-                        percent: overallPercent,
-                        objectCount: totalObjects,
-                        imageIndex: imgIdx,
-                        totalImages: totalImages
-                    });
+                // Free Wasm memory
+                wasm.wasm_dealloc(pxPtr, pixelSize);
+                wasm.wasm_dealloc(clrPtr, colorsSize);
+                wasm.wasm_dealloc(resPtr, resultSize);
+
+                if (hitMax) {
+                    self.postMessage({ type: 'progress', percent: 100, objectCount: totalObjects, imageIndex: imgIdx, totalImages });
+                    self.postMessage({ type: 'complete', code: track.code, objectCount: totalObjects });
+                    return;
+                }
+
+            } else {
+                // ─── JS fallback path (original logic) ──────────────────
+                const totalRows = Math.ceil(imgData.height / step);
+                let rowsDone = 0;
+                const progressInterval = Math.max(Math.floor(totalRows / 50), 1);
+
+                for (let y = 0; y < imgData.height; y += step) {
+                    for (let x = 0; x < imgData.width; x += step) {
+                        const idx = (y * imgData.width + x) * 4;
+                        const alpha = imgData.data[idx + 3];
+                        if (alpha === 0) continue;
+
+                        const r = imgData.data[idx];
+                        const g = imgData.data[idx + 1];
+                        const b = imgData.data[idx + 2];
+
+                        if ((r + g + b) / 3 > 240) continue;
+
+                        const match = getClosestColor(r, g, b, colorLookup);
+                        if (!match) continue;
+
+                        totalObjects++;
+
+                        if (totalObjects > ABSOLUTE_MAX) {
+                            self.postMessage({ type: 'progress', percent: 100, objectCount: totalObjects, imageIndex: imgIdx, totalImages });
+                            self.postMessage({ type: 'complete', code: track.code, objectCount: totalObjects });
+                            return;
+                        }
+
+                        const trackX = ((x - imgData.width / 2) * scale + offset.x + xOffset) * 2;
+                        const trackY = ((y - imgData.height / 2) * scale + offset.y + yOffset) * 2;
+
+                        addResultToTrack(track, match.name, trackX, trackY);
+                    }
+
+                    rowsDone++;
+                    if (rowsDone % progressInterval === 0) {
+                        const imgProgress = rowsDone / totalRows;
+                        const overallPercent = Math.round(((imgIdx + imgProgress) / totalImages) * 100);
+                        self.postMessage({
+                            type: 'progress',
+                            percent: overallPercent,
+                            objectCount: totalObjects,
+                            imageIndex: imgIdx,
+                            totalImages: totalImages
+                        });
+                    }
                 }
             }
         }
@@ -352,3 +454,30 @@ self.onmessage = function (e) {
         self.postMessage({ type: 'error', message: err.message || String(err) });
     }
 };
+
+// ─── Shared helper: add a classified pixel to the track ─────────────────────
+
+function addResultToTrack(track, colorName, trackX, trackY) {
+    switch (colorName) {
+        case 'White (Strongly recommended)': break;
+        case 'PhysicsLine':
+            track.addPhysicsLine(trackX, trackY, trackX + 2, trackY + 2);
+            break;
+        case 'SceneryLine':
+            track.addSceneryLine(trackX, trackY, trackX + 2, trackY + 2);
+            break;
+        case 'Bomb':          track.addBomb(trackX, trackY);          break;
+        case 'Gravity':       track.addGravity(trackX, trackY);       break;
+        case 'Star':          track.addStar(trackX, trackY);          break;
+        case 'Boost':         track.addBoost(trackX, trackY);         break;
+        case 'Antigravity':   track.addAntigravity(trackX, trackY);   break;
+        case 'Checkpoint':    track.addCheckpoint(trackX, trackY);    break;
+        case 'Teleporter':
+            track.addTeleporter(trackX, trackY, trackX + 2, trackY + 2);
+            break;
+        case 'Helicopter':    track.addVehicle(trackX, trackY, 'heli');    break;
+        case 'Truck':         track.addVehicle(trackX, trackY, 'truck');   break;
+        case 'Balloon':       track.addVehicle(trackX, trackY, 'balloon'); break;
+        case 'Blob':          track.addVehicle(trackX, trackY, 'blob');    break;
+    }
+}
