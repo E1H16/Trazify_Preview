@@ -21,20 +21,20 @@ const colorMap = {
     // '#A683C4': 'Blob'
 };
 
-var trackString = ''
-var imageData = null
-var loadedImages = []  // {src, name}
-var imageObjects = []  // Image objects for rendering
-var imageOffsets = []  // [{x, y}, ...] for each image
-var imageScales = []   // [1.0, 0.5, ...] scale per image
-var currentImageIndex = 0
+let trackString = ''
+let imageData = null
+let loadedImages = []  // {src, name}
+let imageObjects = []  // Image objects for rendering
+let imageOffsets = []  // [{x, y}, ...] for each image
+let imageScales = []   // [1.0, 0.5, ...] scale per image
+let currentImageIndex = 0
 
 // Settings
-var xOffset = 0
-var yOffset = 0
-var previewZoom = 1
-var qualityLevel = 2  // 1=Ultra, 2=High, 3=Medium, 4=Low
-var enabledColors = {
+let xOffset = 0
+let yOffset = 0
+let previewZoom = 1
+let qualityLevel = 2  // 1=Ultra, 2=High, 3=Medium, 4=Low
+const enabledColors = {
     '#FFFFFF': false,
     '#0C0C0C': false,
     '#9F9F9F': false,
@@ -83,6 +83,36 @@ previewCanvas.addEventListener('mouseleave', () => {
     previewCanvas.style.cursor = 'crosshair';
 });
 
+previewCanvas.addEventListener('touchstart', (event) => {
+    event.preventDefault();
+    const touch = event.touches[0];
+    isDragging = true;
+    const rect = previewCanvas.getBoundingClientRect();
+    dragStartX = touch.clientX - rect.left;
+    dragStartY = touch.clientY - rect.top;
+    dragStartOffsetX = xOffset;
+    dragStartOffsetY = yOffset;
+}, { passive: false });
+
+previewCanvas.addEventListener('touchmove', (event) => {
+    event.preventDefault();
+    if (isDragging) {
+        const touch = event.touches[0];
+        const rect = previewCanvas.getBoundingClientRect();
+        const currentX = touch.clientX - rect.left;
+        const currentY = touch.clientY - rect.top;
+        const deltaX = (currentX - dragStartX) / previewZoom;
+        const deltaY = (currentY - dragStartY) / previewZoom;
+        xOffset = dragStartOffsetX + Math.round(deltaX);
+        yOffset = dragStartOffsetY + Math.round(deltaY);
+        updateAndClearPreviewCanvas();
+    }
+}, { passive: false });
+
+previewCanvas.addEventListener('touchend', () => {
+    isDragging = false;
+});
+
 let resizeTimeout;
 window.addEventListener('resize', () => {
     clearTimeout(resizeTimeout);
@@ -90,6 +120,15 @@ window.addEventListener('resize', () => {
 });
 
 
+
+function showToast(message, type = 'info') {
+    const container = document.getElementById('toastContainer');
+    const toast = document.createElement('div');
+    toast.className = 'toast toast-' + type;
+    toast.textContent = message;
+    container.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+}
 
 function init() {
     // Add quality selector
@@ -132,7 +171,7 @@ function init() {
         objectsList.appendChild(label);
     }
 
-    outputField.innerText = trackString;
+    outputField.value = trackString;
     updateAndClearPreviewCanvas();
     
     // Add upload button listener
@@ -222,6 +261,14 @@ function updateAndClearPreviewCanvas() {
     }
     
     ctx.restore();
+
+    // Zoom indicator (drawn outside the zoom transform)
+    const zoomCtx = previewCanvas.getContext('2d');
+    const zoomText = Math.round(previewZoom * 100) + '%';
+    zoomCtx.font = '600 12px -apple-system, BlinkMacSystemFont, "Segoe UI"';
+    zoomCtx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+    zoomCtx.textAlign = 'right';
+    zoomCtx.fillText(zoomText, previewCanvas.width - 12, previewCanvas.height - 12);
 }
 
 let keysPressed = {};
@@ -254,10 +301,10 @@ function copyToClipboard() {
     navigator.clipboard.writeText(trackString)
         .then(() => {
             console.log('copied to clipboard')
-            alert('Track code copied to clipboard')
+            showToast('Track code copied to clipboard!', 'success')
         })
         .catch(err => {
-            alert('Oopsie, copy went wrong. Try Manually copying instead', err)
+            showToast('Copy failed. Try manually copying instead.', 'error')
         })
 }
 
@@ -266,7 +313,7 @@ function handleImageUpload(event) {
     
     // Limitar máximo 5 imágenes
     if (files.length > 5) {
-        alert('Maximum 5 images per project. Only first 5 will be loaded.');
+        showToast('Maximum 5 images per project. Only first 5 will be loaded.', 'warning');
     }
     
     const maxFiles = Math.min(files.length, 5);
@@ -295,6 +342,10 @@ function handleImageUpload(event) {
                 buildImageGallery();
                 updateImagePositioningUI();
             }
+        };
+        reader.onerror = function() {
+            console.error('Error reading file:', file.name);
+            showToast('Failed to load image: ' + file.name, 'error');
         };
         reader.readAsDataURL(file);
     });
@@ -354,48 +405,30 @@ function updateImagePositioningUI() {
     
     positioningDiv.style.display = 'block';
     const title = document.createElement('h3');
-    title.style.fontSize = '0.95rem';
-    title.style.marginBottom = '0.618rem';
     title.textContent = 'Image Positioning';
     positioningDiv.appendChild(title);
     
     loadedImages.forEach((img, index) => {
         const container = document.createElement('div');
-        container.style.marginBottom = '0.618rem';
-        container.style.padding = '0.618rem';
-        container.style.backgroundColor = 'rgba(79, 163, 220, 0.06)';
-        container.style.borderRadius = '5px';
-        container.style.border = '1px solid rgba(79, 163, 220, 0.15)';
+        container.className = 'image-position-container';
         
         const label = document.createElement('div');
-        label.style.fontSize = '0.8rem';
-        label.style.marginBottom = '0.5rem';
-        label.style.color = '#a0afc0';
-        label.style.fontWeight = '600';
+        label.className = 'image-position-label';
         label.textContent = (index + 1) + '. ' + img.name;
         container.appendChild(label);
         
         const inputsRow = document.createElement('div');
-        inputsRow.style.display = 'flex';
-        inputsRow.style.gap = '0.5rem';
+        inputsRow.className = 'image-inputs-row';
         
         ['X', 'Y'].forEach((axis, axisIndex) => {
             const inputLabel = document.createElement('label');
-            inputLabel.style.flex = '1';
-            inputLabel.style.display = 'flex';
-            inputLabel.style.flexDirection = 'column';
-            inputLabel.style.gap = '0.3rem';
+            inputLabel.className = 'image-axis-label';
             const axisSpan = document.createElement('span');
             axisSpan.textContent = axis + ' Position';
-            axisSpan.style.fontSize = '0.75rem';
-            axisSpan.style.color = '#7a8fab';
-            axisSpan.style.fontWeight = '600';
+            axisSpan.className = 'image-axis-span';
             const input = document.createElement('input');
             input.type = 'number';
             input.value = imageOffsets[index][axis.toLowerCase()];
-            input.style.width = '100%';
-            input.style.fontSize = '0.8rem';
-            input.style.padding = '0.4rem';
             input.addEventListener('change', () => {
                 imageOffsets[index][axis.toLowerCase()] = parseInt(input.value, 10);
                 updateAndClearPreviewCanvas();
@@ -407,17 +440,11 @@ function updateImagePositioningUI() {
         
         // Scale slider
         const scaleRow = document.createElement('div');
-        scaleRow.style.display = 'flex';
-        scaleRow.style.alignItems = 'center';
-        scaleRow.style.gap = '0.5rem';
-        scaleRow.style.marginTop = '0.5rem';
+        scaleRow.className = 'image-scale-row';
         
         const scaleLabel = document.createElement('span');
         scaleLabel.textContent = 'Scale';
-        scaleLabel.style.fontSize = '0.75rem';
-        scaleLabel.style.color = '#7a8fab';
-        scaleLabel.style.fontWeight = '600';
-        scaleLabel.style.minWidth = '35px';
+        scaleLabel.className = 'image-scale-label';
         
         const scaleSlider = document.createElement('input');
         scaleSlider.type = 'range';
@@ -429,10 +456,7 @@ function updateImagePositioningUI() {
         
         const scaleValue = document.createElement('span');
         scaleValue.textContent = (imageScales[index] || 1.0).toFixed(1) + 'x';
-        scaleValue.style.fontSize = '0.75rem';
-        scaleValue.style.color = '#a0afc0';
-        scaleValue.style.minWidth = '30px';
-        scaleValue.style.textAlign = 'right';
+        scaleValue.className = 'image-scale-value';
         
         scaleSlider.addEventListener('input', () => {
             const val = parseFloat(scaleSlider.value);
@@ -466,20 +490,19 @@ function buildImageGallery() {
     loadedImages.forEach((img, index) => {
         const thumb = document.createElement('img');
         thumb.src = img.src;
-        thumb.style.cssText = 'width: 100%; height: 60px; object-fit: cover; border-radius: 4px; cursor: pointer; border: 2px solid ' + 
-            (index === currentImageIndex ? 'rgba(79, 163, 220, 0.8)' : 'rgba(255, 255, 255, 0.1)') + '; transition: all 0.2s ease;';
+        thumb.className = 'image-thumbnail' + (index === currentImageIndex ? ' active' : '');
         thumb.addEventListener('click', () => {
             currentImageIndex = index;
             buildImageGallery();
         });
         thumb.addEventListener('mouseenter', (e) => {
             if (index !== currentImageIndex) {
-                e.target.style.borderColor = 'rgba(79, 163, 220, 0.4)';
+                e.target.classList.add('hover');
             }
         });
         thumb.addEventListener('mouseleave', (e) => {
             if (index !== currentImageIndex) {
-                e.target.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+                e.target.classList.remove('hover');
             }
         });
         imageGallery.appendChild(thumb);
@@ -509,15 +532,21 @@ function getClosestColor(r, g, b) {
 
 function genTrackFromImageData() {
     if (imageObjects.length === 0) {
-        alert('Please upload an image first')
+        showToast('Please upload an image first', 'warning')
         return
+    }
+
+    const anyColorEnabled = Object.values(enabledColors).some(v => v);
+    if (!anyColorEnabled) {
+        showToast('Please enable at least one object type before generating.', 'warning');
+        return;
     }
 
     const btnGenerate = document.querySelector('.primary-btn');
     const originalText = btnGenerate.textContent;
     btnGenerate.textContent = 'Processing...';
     btnGenerate.disabled = true;
-    outputField.innerText = 'Generating track code...\n\nQuality: ' + ['Ultra High', 'High', 'Medium', 'Low'][qualityLevel - 1];
+    outputField.value = 'Generating track code...\n\nQuality: ' + ['Ultra High', 'High', 'Medium', 'Low'][qualityLevel - 1];
 
     processAllImages();
 
@@ -547,7 +576,7 @@ function genTrackFromImageData() {
                 const currentImageData = ctx.getImageData(0, 0, imgObj.width, imgObj.height);
                 
                 // Process this image
-                outputField.innerText = 'Processing image ' + (currentImageIdx + 1) + ' of ' + imageObjects.length + '...\nQuality: ' + ['Ultra High', 'High', 'Medium', 'Low'][qualityLevel - 1] + '\nTotal objects so far: ' + totalProcessedPixels;
+                outputField.value = 'Processing image ' + (currentImageIdx + 1) + ' of ' + imageObjects.length + '...\nQuality: ' + ['Ultra High', 'High', 'Medium', 'Low'][qualityLevel - 1] + '\nTotal objects so far: ' + totalProcessedPixels;
                 processImageChunked(track, currentImageData, imgOffset, currentImageIdx);
                 
                 function processImageChunked(trackObj, imgData, offset, imgIndex) {
@@ -593,7 +622,7 @@ function genTrackFromImageData() {
                                 // Scale limit by quality: Ultra=120K, High=60K, Medium=30K, Low=15K
                                 const maxObjects = [120000, 60000, 30000, 15000][qualityLevel - 1];
                                 if (totalProcessedPixels > maxObjects) {
-                                    outputField.innerText = 'Image too complex. Reduced detail for stability.\nTotal Objects: ' + totalProcessedPixels;
+                                    outputField.value = 'Image too complex. Reduced detail for stability.\nTotal Objects: ' + totalProcessedPixels;
                                     completeProcessing(trackObj, totalProcessedPixels);
                                     return;
                                 }
@@ -673,7 +702,7 @@ function genTrackFromImageData() {
                     
         } catch (error) {
             console.error('Error generating track:', error);
-            outputField.innerText = 'Error: Failed to generate track code. Try a simpler image.';
+            outputField.value = 'Error: Failed to generate track code. Try a simpler image.';
             btnGenerate.textContent = originalText;
             btnGenerate.disabled = false;
         }
@@ -681,7 +710,7 @@ function genTrackFromImageData() {
     
     function completeProcessing(track, pixelCount) {
         trackString = track.code;
-        outputField.innerText = 'Track Generated!\nTotal Objects: ' + pixelCount + '\n\n' + trackString;
+        outputField.value = 'Track Generated!\nTotal Objects: ' + pixelCount + '\n\n' + trackString;
         btnGenerate.textContent = originalText;
         btnGenerate.disabled = false;
     }

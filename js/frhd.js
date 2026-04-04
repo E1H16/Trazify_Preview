@@ -301,15 +301,15 @@ class FrhdTrack {
         for (const i in this.physicsLines) {
             const line = this.physicsLines[i];
             for (let index = 0; index < line.length; index += 2) {
-                line[i] += x;
-                line[i + 1] += y;
+                line[index] += x;
+                line[index + 1] += y;
             }
         }
         for (const i in this.sceneryLines) {
             const line = this.sceneryLines[i];
             for (let index = 0; index < line.length; index += 2) {
-                line[i] += x;
-                line[i + 1] += y;
+                line[index] += x;
+                line[index + 1] += y;
             }
         }
         for (let type in this.powerups) {
