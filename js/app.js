@@ -1,8 +1,13 @@
-const outputField = document.getElementById('outputField')
-const previewCanvas = document.getElementById('previewCanvas')
-const sidebar = document.getElementById('sidebar')
-const settingsContainer = document.getElementById('settingsContainer')
-const generalSettings = document.getElementById('generalSettings')
+/**
+ * Trazify — Main application logic.
+ * Handles UI, canvas rendering, image loading, and Web Worker management.
+ */
+
+const outputField = document.getElementById('outputField');
+const previewCanvas = document.getElementById('previewCanvas');
+const sidebar = document.getElementById('sidebar');
+const settingsContainer = document.getElementById('settingsContainer');
+const generalSettings = document.getElementById('generalSettings');
 
 const colorMap = {
     '#FFFFFF': 'White (Strongly recommended)',
@@ -15,25 +20,21 @@ const colorMap = {
     '#07FAF3': 'Antigravity',
     '#776FE1': 'Checkpoint',
     '#DC45EC': 'Teleporter',
-    // '#F59322': 'Helicopter',
-    // '#93D34E': 'Truck',
-    // '#F02627': 'Balloon',
-    // '#A683C4': 'Blob'
 };
 
-let trackString = ''
-let imageData = null
-let loadedImages = []  // {src, name}
-let imageObjects = []  // Image objects for rendering
-let imageOffsets = []  // [{x, y}, ...] for each image
-let imageScales = []   // [1.0, 0.5, ...] scale per image
-let currentImageIndex = 0
+let trackString = '';
+let imageData = null;
+let loadedImages = [];   // {blob, name, objectUrl}
+let imageObjects = [];   // Image objects for rendering
+let imageOffsets = [];    // [{x, y}, ...] for each image
+let imageScales = [];     // [1.0, 0.5, ...] scale per image
+let currentImageIndex = 0;
 
 // Settings
-let xOffset = 0
-let yOffset = 0
-let previewZoom = 1
-let qualityLevel = 2  // 1=Ultra, 2=High, 3=Medium, 4=Low
+let xOffset = 0;
+let yOffset = 0;
+let previewZoom = 1;
+let qualityLevel = 2;   // 1=Ultra, 2=High, 3=Medium, 4=Low
 const enabledColors = {
     '#FFFFFF': false,
     '#0C0C0C': false,
@@ -45,21 +46,64 @@ const enabledColors = {
     '#07FAF3': false,
     '#776FE1': false,
     '#DC45EC': false,
-    // '#F59322': false,
-    // '#93D34E': false,
-    // '#F02627': false,
-    // '#A683C4': false
 };
 
-let isDragging = false
-let dragStartX = 0
-let dragStartY = 0
-let dragStartOffsetX = 0
-let dragStartOffsetY = 0
+// Drag state
+let isDragging = false;
+let dragStartX = 0;
+let dragStartY = 0;
+let dragStartOffsetX = 0;
+let dragStartOffsetY = 0;
 
-previewCanvas.addEventListener('mousedown', (event) => {
+// Pinch-to-zoom state
+let lastPinchDist = 0;
+let isPinching = false;
+
+// Worker management
+let currentWorker = null;
+let workerTimeout = null;
+const WORKER_TIMEOUT_MS = 120000; // 2 minutes
+
+// ─── Image file validation ─────────────────────────────────────────────────
+
+/** Valid image magic bytes signatures */
+const IMAGE_SIGNATURES = [
+    { bytes: [0x89, 0x50, 0x4E, 0x47], type: 'image/png' },       // PNG
+    { bytes: [0xFF, 0xD8, 0xFF],        type: 'image/jpeg' },      // JPEG
+    { bytes: [0x47, 0x49, 0x46, 0x38],  type: 'image/gif' },       // GIF
+    { bytes: [0x52, 0x49, 0x46, 0x46],  type: 'image/webp' },      // WebP (RIFF)
+    { bytes: [0x42, 0x4D],              type: 'image/bmp' },       // BMP
+];
+
+/**
+ * Validates an image file by checking its magic bytes.
+ * @param {File} file - The file to validate
+ * @returns {Promise<boolean>} Whether the file has valid image magic bytes
+ */
+function validateImageFile(file) {
+    return new Promise(function(resolve) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const arr = new Uint8Array(e.target.result);
+            const isValid = IMAGE_SIGNATURES.some(function(sig) {
+                return sig.bytes.every(function(byte, i) {
+                    return arr[i] === byte;
+                });
+            });
+            resolve(isValid);
+        };
+        reader.onerror = function() {
+            resolve(false);
+        };
+        reader.readAsArrayBuffer(file.slice(0, 8));
+    });
+}
+
+// ─── Canvas event handlers ──────────────────────────────────────────────────
+
+previewCanvas.addEventListener('mousedown', function(event) {
     isDragging = true;
-    previewCanvas.style.cursor = 'grabbing';
+    previewCanvas.classList.add('dragging');
     const rect = previewCanvas.getBoundingClientRect();
     dragStartX = event.clientX - rect.left;
     dragStartY = event.clientY - rect.top;
@@ -67,36 +111,56 @@ previewCanvas.addEventListener('mousedown', (event) => {
     dragStartOffsetY = yOffset;
 });
 
-previewCanvas.addEventListener('mousemove', (event) => {
+previewCanvas.addEventListener('mousemove', function(event) {
     if (isDragging) {
-        updateOffsetDrag(event)
+        updateOffsetDrag(event);
     }
 });
 
-previewCanvas.addEventListener('mouseup', () => {
+previewCanvas.addEventListener('mouseup', function() {
     isDragging = false;
-    previewCanvas.style.cursor = 'crosshair';
+    previewCanvas.classList.remove('dragging');
 });
 
-previewCanvas.addEventListener('mouseleave', () => {
+previewCanvas.addEventListener('mouseleave', function() {
     isDragging = false;
-    previewCanvas.style.cursor = 'crosshair';
+    previewCanvas.classList.remove('dragging');
 });
 
-previewCanvas.addEventListener('touchstart', (event) => {
+// Touch events with pinch-to-zoom support
+previewCanvas.addEventListener('touchstart', function(event) {
     event.preventDefault();
-    const touch = event.touches[0];
-    isDragging = true;
-    const rect = previewCanvas.getBoundingClientRect();
-    dragStartX = touch.clientX - rect.left;
-    dragStartY = touch.clientY - rect.top;
-    dragStartOffsetX = xOffset;
-    dragStartOffsetY = yOffset;
+
+    if (event.touches.length === 2) {
+        // Pinch-to-zoom start
+        isPinching = true;
+        isDragging = false;
+        lastPinchDist = getPinchDistance(event.touches);
+    } else if (event.touches.length === 1 && !isPinching) {
+        // Single touch drag
+        const touch = event.touches[0];
+        isDragging = true;
+        const rect = previewCanvas.getBoundingClientRect();
+        dragStartX = touch.clientX - rect.left;
+        dragStartY = touch.clientY - rect.top;
+        dragStartOffsetX = xOffset;
+        dragStartOffsetY = yOffset;
+    }
 }, { passive: false });
 
-previewCanvas.addEventListener('touchmove', (event) => {
+previewCanvas.addEventListener('touchmove', function(event) {
     event.preventDefault();
-    if (isDragging) {
+
+    if (event.touches.length === 2 && isPinching) {
+        // Pinch-to-zoom
+        const newDist = getPinchDistance(event.touches);
+        if (lastPinchDist > 0) {
+            const scale = newDist / lastPinchDist;
+            previewZoom = Math.max(0.4, Math.min(3, previewZoom * scale));
+            updateAndClearPreviewCanvas();
+        }
+        lastPinchDist = newDist;
+    } else if (isDragging && event.touches.length === 1) {
         const touch = event.touches[0];
         const rect = previewCanvas.getBoundingClientRect();
         const currentX = touch.clientX - rect.left;
@@ -109,28 +173,61 @@ previewCanvas.addEventListener('touchmove', (event) => {
     }
 }, { passive: false });
 
-previewCanvas.addEventListener('touchend', () => {
-    isDragging = false;
+previewCanvas.addEventListener('touchend', function(event) {
+    if (event.touches.length < 2) {
+        isPinching = false;
+        lastPinchDist = 0;
+    }
+    if (event.touches.length === 0) {
+        isDragging = false;
+    }
 });
 
-let resizeTimeout;
-window.addEventListener('resize', () => {
-    clearTimeout(resizeTimeout);
-    resizeTimeout = setTimeout(updateAndClearPreviewCanvas, 50);
-});
+/**
+ * Calculates distance between two touch points for pinch-to-zoom.
+ * @param {TouchList} touches
+ * @returns {number}
+ */
+function getPinchDistance(touches) {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+}
 
+// Resize handling with ResizeObserver
+if (typeof ResizeObserver !== 'undefined') {
+    const resizeObserver = new ResizeObserver(function() {
+        updateAndClearPreviewCanvas();
+    });
+    resizeObserver.observe(previewCanvas);
+} else {
+    let resizeTimeout;
+    window.addEventListener('resize', function() {
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(updateAndClearPreviewCanvas, 50);
+    });
+}
 
+// ─── Toast notifications ────────────────────────────────────────────────────
 
-function showToast(message, type = 'info') {
+/**
+ * Shows a toast notification.
+ * @param {string} message - The message to display
+ * @param {string} [type='info'] - Toast type: 'info', 'success', 'warning', 'error'
+ */
+function showToast(message, type) {
+    type = type || 'info';
     const container = document.getElementById('toastContainer');
     const toast = document.createElement('div');
     toast.className = 'toast toast-' + type;
     toast.textContent = message;
     container.appendChild(toast);
-    setTimeout(() => toast.remove(), 3000);
+    setTimeout(function() { toast.remove(); }, 3000);
 }
 
-function init() {
+// ─── Initialization ─────────────────────────────────────────────────────────
+
+document.addEventListener('DOMContentLoaded', function() {
     // Add quality selector
     const qualityLabel = document.createElement('label');
     qualityLabel.style.display = 'flex';
@@ -141,20 +238,29 @@ function init() {
     const qualitySelect = document.createElement('select');
     qualitySelect.id = 'qualitySelect';
     qualitySelect.style.flex = '1';
-    qualitySelect.innerHTML = `
-        <option value="1">Ultra High (Slower, Best Detail)</option>
-        <option value="2" selected>High (Balanced)</option>
-        <option value="3">Medium (Faster)</option>
-        <option value="4">Low (Fastest)</option>
-    `;
-    qualitySelect.addEventListener('change', () => {
+
+    var options = [
+        { value: '1', text: 'Ultra High (Slower, Best Detail)' },
+        { value: '2', text: 'High (Balanced)', selected: true },
+        { value: '3', text: 'Medium (Faster)' },
+        { value: '4', text: 'Low (Fastest)' }
+    ];
+    options.forEach(function(opt) {
+        var optEl = document.createElement('option');
+        optEl.value = opt.value;
+        optEl.textContent = opt.text;
+        if (opt.selected) optEl.selected = true;
+        qualitySelect.appendChild(optEl);
+    });
+
+    qualitySelect.addEventListener('change', function() {
         qualityLevel = parseInt(qualitySelect.value, 10);
     });
     qualityLabel.appendChild(qualitySpan);
     qualityLabel.appendChild(qualitySelect);
     generalSettings.appendChild(qualityLabel);
 
-    // Add objects directly (no collapsible)
+    // Add objects list
     const objectsList = document.getElementById('objectsList');
     for (const color in colorMap) {
         const label = document.createElement('label');
@@ -163,7 +269,7 @@ function init() {
         const input = document.createElement('input');
         input.type = 'checkbox';
         input.checked = !!enabledColors[color];
-        input.addEventListener('change', () => {
+        input.addEventListener('change', function() {
             enabledColors[color] = input.checked;
         });
         label.appendChild(span);
@@ -179,23 +285,38 @@ function init() {
     if (uploadButton) {
         uploadButton.addEventListener('change', handleImageUpload);
     }
-}
 
+    // Add button event listeners (no inline onclick)
+    var btnGenerate = document.getElementById('btnGenerate');
+    var btnCopy = document.getElementById('btnCopy');
+    var btnReset = document.getElementById('btnReset');
+    if (btnGenerate) btnGenerate.addEventListener('click', genTrackFromImageData);
+    if (btnCopy) btnCopy.addEventListener('click', copyToClipboard);
+    if (btnReset) btnReset.addEventListener('click', resetProject);
+});
+
+// ─── Canvas rendering ───────────────────────────────────────────────────────
+
+/**
+ * Updates the drag offset based on mouse event.
+ * @param {MouseEvent} event
+ */
 function updateOffsetDrag(event) {
     const rect = previewCanvas.getBoundingClientRect();
     const currentX = event.clientX - rect.left;
     const currentY = event.clientY - rect.top;
     
-    // Calcular delta del arrastre ajustado por zoom
     const deltaX = (currentX - dragStartX) / previewZoom;
     const deltaY = (currentY - dragStartY) / previewZoom;
     
-    // Aplicar delta al offset inicial
     xOffset = dragStartOffsetX + Math.round(deltaX);
     yOffset = dragStartOffsetY + Math.round(deltaY);
     updateAndClearPreviewCanvas();
 }
 
+/**
+ * Redraws the preview canvas with all loaded images and UI elements.
+ */
 function updateAndClearPreviewCanvas() {
     const ctx = previewCanvas.getContext('2d');
     previewCanvas.width = previewCanvas.clientWidth;
@@ -204,26 +325,27 @@ function updateAndClearPreviewCanvas() {
     const centerX = previewCanvas.width / 2;
     const centerY = previewCanvas.height / 2;
     
-    // Limpiar canvas con fondo blanco
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, previewCanvas.width, previewCanvas.height);
     
     ctx.save();
     
-    // Aplicar zoom desde el centro
     ctx.translate(centerX, centerY);
     ctx.scale(previewZoom, previewZoom);
     ctx.translate(-centerX, -centerY);
     
     if (imageObjects.length === 0) {
-        // Sin imagen - mostrar mensaje
-        ctx.fillStyle = '#4a5568';
+        // Placeholder message
+        ctx.fillStyle = '#94a3b8';
         ctx.textAlign = 'center';
         ctx.font = 'bold 18px -apple-system, BlinkMacSystemFont, "Segoe UI"';
-        ctx.fillText('Upload an image to get started', centerX, centerY);
+        ctx.fillText('Upload an image to get started', centerX, centerY - 10);
+        ctx.font = '14px -apple-system, BlinkMacSystemFont, "Segoe UI"';
+        ctx.fillStyle = '#cbd5e1';
+        ctx.fillText('Drag & drop or use the upload button', centerX, centerY + 16);
     } else {
         // Draw all images with their offsets and scale
-        imageObjects.forEach((imgObj, index) => {
+        imageObjects.forEach(function(imgObj, index) {
             const offset = imageOffsets[index] || { x: 0, y: 0 };
             const scale = imageScales[index] || 1.0;
             const scaledW = imgObj.width * scale;
@@ -233,7 +355,7 @@ function updateAndClearPreviewCanvas() {
             ctx.drawImage(imgObj, imgX, imgY, scaledW, scaledH);
         });
 
-        // Draw spawn point marker (ORIGEN DEL TRACK)
+        // Draw spawn point marker
         ctx.beginPath();
         ctx.arc(centerX, centerY, 6, 0, Math.PI * 2);
         ctx.fillStyle = 'rgba(255, 68, 68, 0.9)';
@@ -270,20 +392,21 @@ function updateAndClearPreviewCanvas() {
     ctx.fillText(zoomText, previewCanvas.width - 12, previewCanvas.height - 12);
 }
 
+// ─── Keyboard & wheel events ────────────────────────────────────────────────
+
 let keysPressed = {};
 
-document.addEventListener('keydown', (event) => {
+document.addEventListener('keydown', function(event) {
     keysPressed[event.key] = true;
 });
 
-document.addEventListener('keyup', (event) => {
+document.addEventListener('keyup', function(event) {
     keysPressed[event.key] = false;
 });
 
-previewCanvas.addEventListener('wheel', (event) => {
+previewCanvas.addEventListener('wheel', function(event) {
     event.preventDefault();
     const zoomFactor = 0.12;
-    const oldZoom = previewZoom;
     
     if (event.deltaY < 0) {
         previewZoom += zoomFactor;
@@ -291,26 +414,38 @@ previewCanvas.addEventListener('wheel', (event) => {
         previewZoom -= zoomFactor;
     }
     
-    // Límites estrictos para zoom: 0.4x a 3x
     previewZoom = Math.max(0.4, Math.min(3, previewZoom));
     updateAndClearPreviewCanvas();
 });
 
+// ─── Clipboard ──────────────────────────────────────────────────────────────
+
+/**
+ * Copies the generated track string to the clipboard.
+ */
 function copyToClipboard() {
+    if (!trackString) {
+        showToast('No track code to copy. Generate one first.', 'warning');
+        return;
+    }
     navigator.clipboard.writeText(trackString)
-        .then(() => {
-            console.log('copied to clipboard')
-            showToast('Track code copied to clipboard!', 'success')
+        .then(function() {
+            showToast('Track code copied to clipboard!', 'success');
         })
-        .catch(err => {
-            showToast('Copy failed. Try manually copying instead.', 'error')
-        })
+        .catch(function() {
+            showToast('Copy failed. Try manually copying instead.', 'error');
+        });
 }
 
-function handleImageUpload(event) {
+// ─── Image upload and management ────────────────────────────────────────────
+
+/**
+ * Handles image file uploads with validation.
+ * @param {Event} event - The file input change event
+ */
+async function handleImageUpload(event) {
     const files = event.target.files;
     
-    // Limitar máximo 5 imágenes
     if (files.length > 5) {
         showToast('Maximum 5 images per project. Only first 5 will be loaded.', 'warning');
     }
@@ -318,38 +453,75 @@ function handleImageUpload(event) {
     const maxFiles = Math.min(files.length, 5);
     if (maxFiles === 0) return;
     
-    loadedImages = new Array(maxFiles);
-    imageOffsets = new Array(maxFiles);
-    imageScales = new Array(maxFiles);
+    // Validate all files first
+    const filesToProcess = Array.from(files).slice(0, 5);
+    const validFiles = [];
+    
+    for (let i = 0; i < filesToProcess.length; i++) {
+        const file = filesToProcess[i];
+        try {
+            const isValid = await validateImageFile(file);
+            if (isValid) {
+                validFiles.push({ file: file, index: i });
+            } else {
+                showToast('Invalid image file: ' + file.name, 'error');
+            }
+        } catch (err) {
+            showToast('Failed to validate file: ' + file.name, 'error');
+        }
+    }
+
+    if (validFiles.length === 0) {
+        showToast('No valid image files found.', 'error');
+        return;
+    }
+    
+    // Clean up old object URLs
+    revokeOldObjectUrls();
+    
+    loadedImages = new Array(validFiles.length);
+    imageOffsets = new Array(validFiles.length);
+    imageScales = new Array(validFiles.length);
     imageObjects = [];
     currentImageIndex = 0;
     let loadedCount = 0;
     
-    Array.from(files).slice(0, 5).forEach((file, fileIndex) => {
-        const reader = new FileReader();
-        reader.onload = function (e) {
-            // Preserve file order by index
-            loadedImages[fileIndex] = {
-                src: e.target.result,
-                name: file.name
-            };
-            imageOffsets[fileIndex] = { x: 0, y: 0 };
-            imageScales[fileIndex] = 1.0;
-            loadedCount++;
-            if (loadedCount === maxFiles) {
-                loadAllImages();
-                buildImageGallery();
-                updateImagePositioningUI();
-            }
+    validFiles.forEach(function(item, idx) {
+        const file = item.file;
+        // Use Blob URLs instead of Data URLs for better memory efficiency
+        const objectUrl = URL.createObjectURL(file);
+        
+        loadedImages[idx] = {
+            src: objectUrl,
+            name: file.name,
+            objectUrl: objectUrl
         };
-        reader.onerror = function() {
-            console.error('Error reading file:', file.name);
-            showToast('Failed to load image: ' + file.name, 'error');
-        };
-        reader.readAsDataURL(file);
+        imageOffsets[idx] = { x: 0, y: 0 };
+        imageScales[idx] = 1.0;
+        loadedCount++;
+        
+        if (loadedCount === validFiles.length) {
+            loadAllImages();
+            buildImageGallery();
+            updateImagePositioningUI();
+        }
     });
 }
 
+/**
+ * Revokes all existing Blob Object URLs to free memory.
+ */
+function revokeOldObjectUrls() {
+    loadedImages.forEach(function(img) {
+        if (img && img.objectUrl) {
+            URL.revokeObjectURL(img.objectUrl);
+        }
+    });
+}
+
+/**
+ * Loads all images from their URLs into Image objects for canvas rendering.
+ */
 function loadAllImages() {
     imageObjects = new Array(loadedImages.length);
     let loadedCount = 0;
@@ -361,14 +533,12 @@ function loadAllImages() {
         return;
     }
     
-    loadedImages.forEach((imgItem, index) => {
+    loadedImages.forEach(function(imgItem, index) {
         const imgObj = new Image();
-        imgObj.onload = function () {
-            // Preserve order by using index, not push
+        imgObj.onload = function() {
             imageObjects[index] = imgObj;
             loadedCount++;
             if (loadedCount === totalImages) {
-                // Use first image data for reference
                 const canvas = document.createElement('canvas');
                 const ctx = canvas.getContext('2d');
                 canvas.width = imageObjects[0].width;
@@ -378,10 +548,16 @@ function loadAllImages() {
                 updateAndClearPreviewCanvas();
             }
         };
+        imgObj.onerror = function() {
+            showToast('Failed to load image: ' + imgItem.name, 'error');
+        };
         imgObj.src = imgItem.src;
     });
 }
 
+/**
+ * Builds the image positioning UI controls in the sidebar.
+ */
 function updateImagePositioningUI() {
     const imagesSection = document.getElementById('imagesSection');
     let positioningDiv = document.getElementById('imagePositioning');
@@ -389,13 +565,14 @@ function updateImagePositioningUI() {
     if (!positioningDiv) {
         positioningDiv = document.createElement('div');
         positioningDiv.id = 'imagePositioning';
-        positioningDiv.style.borderTop = '1px solid rgba(255, 255, 255, 0.04)';
-        positioningDiv.style.marginTop = '1rem';
-        positioningDiv.style.paddingTop = '1rem';
+        positioningDiv.className = 'section-divider';
         imagesSection.appendChild(positioningDiv);
     }
     
-    positioningDiv.innerHTML = '';
+    // Clear children using DOM methods
+    while (positioningDiv.firstChild) {
+        positioningDiv.removeChild(positioningDiv.firstChild);
+    }
     
     if (loadedImages.length < 1) {
         positioningDiv.style.display = 'none';
@@ -407,7 +584,7 @@ function updateImagePositioningUI() {
     title.textContent = 'Image Positioning';
     positioningDiv.appendChild(title);
     
-    loadedImages.forEach((img, index) => {
+    loadedImages.forEach(function(img, index) {
         const container = document.createElement('div');
         container.className = 'image-position-container';
         
@@ -419,7 +596,7 @@ function updateImagePositioningUI() {
         const inputsRow = document.createElement('div');
         inputsRow.className = 'image-inputs-row';
         
-        ['X', 'Y'].forEach((axis, axisIndex) => {
+        ['X', 'Y'].forEach(function(axis) {
             const inputLabel = document.createElement('label');
             inputLabel.className = 'image-axis-label';
             const axisSpan = document.createElement('span');
@@ -428,7 +605,8 @@ function updateImagePositioningUI() {
             const input = document.createElement('input');
             input.type = 'number';
             input.value = imageOffsets[index][axis.toLowerCase()];
-            input.addEventListener('change', () => {
+            input.setAttribute('aria-label', img.name + ' ' + axis + ' position');
+            input.addEventListener('change', function() {
                 imageOffsets[index][axis.toLowerCase()] = parseInt(input.value, 10);
                 updateAndClearPreviewCanvas();
             });
@@ -452,12 +630,13 @@ function updateImagePositioningUI() {
         scaleSlider.step = '0.1';
         scaleSlider.value = imageScales[index] || 1.0;
         scaleSlider.style.flex = '1';
+        scaleSlider.setAttribute('aria-label', img.name + ' scale');
         
         const scaleValue = document.createElement('span');
         scaleValue.textContent = (imageScales[index] || 1.0).toFixed(1) + 'x';
         scaleValue.className = 'image-scale-value';
         
-        scaleSlider.addEventListener('input', () => {
+        scaleSlider.addEventListener('input', function() {
             const val = parseFloat(scaleSlider.value);
             imageScales[index] = val;
             scaleValue.textContent = val.toFixed(1) + 'x';
@@ -473,43 +652,47 @@ function updateImagePositioningUI() {
     });
 }
 
+/**
+ * Builds the image gallery thumbnails in the sidebar.
+ */
 function buildImageGallery() {
     const imageGallery = document.getElementById('imageGallery');
     const imagesSection = document.getElementById('imagesSection');
     
-    imageGallery.innerHTML = '';
+    // Clear children using DOM methods
+    while (imageGallery.firstChild) {
+        imageGallery.removeChild(imageGallery.firstChild);
+    }
     
     if (loadedImages.length < 1) {
-        imagesSection.style.display = 'none';
+        imagesSection.classList.remove('visible');
         return;
     }
     
-    imagesSection.style.display = 'block';
+    imagesSection.classList.add('visible');
     
-    loadedImages.forEach((img, index) => {
+    loadedImages.forEach(function(img, index) {
         const thumb = document.createElement('img');
         thumb.src = img.src;
+        thumb.alt = img.name;
         thumb.className = 'image-thumbnail' + (index === currentImageIndex ? ' active' : '');
-        thumb.addEventListener('click', () => {
+        thumb.addEventListener('click', function() {
             currentImageIndex = index;
             buildImageGallery();
-        });
-        thumb.addEventListener('mouseenter', (e) => {
-            if (index !== currentImageIndex) {
-                e.target.classList.add('hover');
-            }
-        });
-        thumb.addEventListener('mouseleave', (e) => {
-            if (index !== currentImageIndex) {
-                e.target.classList.remove('hover');
-            }
         });
         imageGallery.appendChild(thumb);
     });
 }
 
+// ─── Color matching ─────────────────────────────────────────────────────────
 
-
+/**
+ * Finds the closest enabled color to the given RGB values.
+ * @param {number} r - Red channel (0-255)
+ * @param {number} g - Green channel (0-255)
+ * @param {number} b - Blue channel (0-255)
+ * @returns {string|null} The closest color hex string, or null
+ */
 function getClosestColor(r, g, b) {
     let closestColor = null;
     let closestDistanceSq = Infinity;
@@ -529,19 +712,41 @@ function getClosestColor(r, g, b) {
     return closestColor;
 }
 
+// ─── Track generation with Web Worker ───────────────────────────────────────
+
+/**
+ * Cancels any in-progress track generation.
+ */
+function cancelGeneration() {
+    if (currentWorker) {
+        currentWorker.terminate();
+        currentWorker = null;
+    }
+    if (workerTimeout) {
+        clearTimeout(workerTimeout);
+        workerTimeout = null;
+    }
+}
+
+/**
+ * Generates track code from the loaded images using a Web Worker.
+ */
 function genTrackFromImageData() {
     if (imageObjects.length === 0) {
-        showToast('Please upload an image first', 'warning')
-        return
+        showToast('Please upload an image first', 'warning');
+        return;
     }
 
-    const anyColorEnabled = Object.values(enabledColors).some(v => v);
+    const anyColorEnabled = Object.values(enabledColors).some(function(v) { return v; });
     if (!anyColorEnabled) {
         showToast('Please enable at least one object type before generating.', 'warning');
         return;
     }
 
-    const btnGenerate = document.querySelector('.primary-btn');
+    // Cancel any in-progress generation
+    cancelGeneration();
+
+    const btnGenerate = document.getElementById('btnGenerate');
     const originalText = btnGenerate.textContent;
     btnGenerate.textContent = 'Processing...';
     btnGenerate.disabled = true;
@@ -550,14 +755,19 @@ function genTrackFromImageData() {
     const progressContainer = document.getElementById('progressContainer');
     const progressBarFill   = document.getElementById('progressBarFill');
     const progressText      = document.getElementById('progressText');
-    progressContainer.style.display = 'flex';
+    const progressDetail    = document.getElementById('progressDetail');
+    const progressBarTrack  = document.getElementById('progressBarTrack');
+    progressContainer.classList.add('visible');
     progressBarFill.style.width = '0%';
     progressText.textContent = '0%';
+    if (progressDetail) progressDetail.textContent = '';
+    if (progressBarTrack) progressBarTrack.setAttribute('aria-valuenow', '0');
 
     outputField.value = 'Generating track code...\n\nQuality: ' + ['Ultra High', 'High', 'Medium', 'Low'][qualityLevel - 1];
 
-    // Build image data arrays to send to worker
+    // Build image data arrays to send to worker, using Transferable Objects
     const imageDataArrays = [];
+    const transferables = [];
     for (let i = 0; i < imageObjects.length; i++) {
         const imgObj = imageObjects[i];
         const canvas = document.createElement('canvas');
@@ -565,18 +775,32 @@ function genTrackFromImageData() {
         canvas.width  = imgObj.width;
         canvas.height = imgObj.height;
         ctx.drawImage(imgObj, 0, 0);
-        const imgData = ctx.getImageData(0, 0, imgObj.width, imgObj.height);
+        const imgDataObj = ctx.getImageData(0, 0, imgObj.width, imgObj.height);
         imageDataArrays.push({
-            data:   imgData.data,
-            width:  imgData.width,
-            height: imgData.height
+            data:   imgDataObj.data,
+            width:  imgDataObj.width,
+            height: imgDataObj.height
         });
+        transferables.push(imgDataObj.data.buffer);
     }
 
     // Launch Web Worker
-    const worker = new Worker('js/track-worker.js');
+    currentWorker = new Worker('js/track-worker.js');
 
-    worker.postMessage({
+    // Set timeout for safety
+    workerTimeout = setTimeout(function() {
+        if (currentWorker) {
+            currentWorker.terminate();
+            currentWorker = null;
+            outputField.value = 'Error: Track generation timed out. Try a lower quality setting or a simpler image.';
+            showToast('Generation timed out after ' + (WORKER_TIMEOUT_MS / 1000) + ' seconds.', 'error');
+            btnGenerate.textContent = originalText;
+            btnGenerate.disabled = false;
+            progressContainer.classList.remove('visible');
+        }
+    }, WORKER_TIMEOUT_MS);
+
+    var messagePayload = {
         imageDataArrays: imageDataArrays,
         colorMap:        colorMap,
         enabledColors:   enabledColors,
@@ -585,51 +809,78 @@ function genTrackFromImageData() {
         imageScales:     imageScales,
         xOffset:         xOffset,
         yOffset:         yOffset
-    });
+    };
 
-    worker.onmessage = function (e) {
+    // Use Transferable Objects for better performance
+    currentWorker.postMessage(messagePayload, transferables);
+
+    currentWorker.onmessage = function(e) {
         const msg = e.data;
 
         if (msg.type === 'progress') {
             const pct = Math.min(msg.percent, 100);
             progressBarFill.style.width = pct + '%';
             progressText.textContent = pct + '%';
+            if (progressBarTrack) progressBarTrack.setAttribute('aria-valuenow', String(pct));
+            if (progressDetail) {
+                progressDetail.textContent = 'Processing image ' + (msg.imageIndex + 1) + ' of ' + msg.totalImages + ' · ' + msg.objectCount + ' objects';
+            }
             outputField.value = 'Processing image ' + (msg.imageIndex + 1) + ' of ' + msg.totalImages +
                 '...\nQuality: ' + ['Ultra High', 'High', 'Medium', 'Low'][qualityLevel - 1] +
                 '\nTotal objects so far: ' + msg.objectCount;
         } else if (msg.type === 'complete') {
+            clearTimeout(workerTimeout);
+            workerTimeout = null;
             trackString = msg.code;
             outputField.value = 'Track Generated!\nTotal Objects: ' + msg.objectCount + '\n\n' + trackString;
             btnGenerate.textContent = originalText;
             btnGenerate.disabled = false;
             progressBarFill.style.width = '100%';
             progressText.textContent = '100%';
-            setTimeout(function () { progressContainer.style.display = 'none'; }, 1500);
-            worker.terminate();
+            if (progressBarTrack) progressBarTrack.setAttribute('aria-valuenow', '100');
+            if (progressDetail) progressDetail.textContent = 'Complete — ' + msg.objectCount + ' objects generated';
+            setTimeout(function() { progressContainer.classList.remove('visible'); }, 1500);
+            currentWorker.terminate();
+            currentWorker = null;
         } else if (msg.type === 'error') {
-            console.error('Worker error:', msg.message);
+            clearTimeout(workerTimeout);
+            workerTimeout = null;
             outputField.value = 'Error: ' + msg.message;
             showToast('Generation failed: ' + msg.message, 'error');
             btnGenerate.textContent = originalText;
             btnGenerate.disabled = false;
-            progressContainer.style.display = 'none';
-            worker.terminate();
+            progressContainer.classList.remove('visible');
+            currentWorker.terminate();
+            currentWorker = null;
         }
     };
 
-    worker.onerror = function (err) {
-        console.error('Worker error:', err);
+    currentWorker.onerror = function(err) {
+        clearTimeout(workerTimeout);
+        workerTimeout = null;
         outputField.value = 'Error: Failed to generate track code. Try a simpler image.';
         showToast('Generation failed. Check console for details.', 'error');
         btnGenerate.textContent = originalText;
         btnGenerate.disabled = false;
-        progressContainer.style.display = 'none';
-        worker.terminate();
+        progressContainer.classList.remove('visible');
+        currentWorker.terminate();
+        currentWorker = null;
     };
 }
 
+// ─── Project reset ──────────────────────────────────────────────────────────
+
+/**
+ * Resets the entire project state and UI.
+ */
 function resetProject() {
     try {
+        // Cancel any in-progress generation
+        cancelGeneration();
+
+        // Revoke old object URLs
+        revokeOldObjectUrls();
+
         // Clear all data
         trackString = '';
         imageData = null;
@@ -643,7 +894,7 @@ function resetProject() {
         previewZoom = 1;
         qualityLevel = 2;
         
-        // Reset UI with element validation
+        // Reset UI
         if (outputField) {
             outputField.value = '';
         }
@@ -653,27 +904,37 @@ function resetProject() {
         const uploadBtn = document.getElementById('uploadButton');
         if (uploadBtn) uploadBtn.value = '';
         
-        // Clear image gallery with validation
+        // Clear image gallery
         const imageGallery = document.getElementById('imageGallery');
         if (imageGallery) {
-            imageGallery.innerHTML = '';
+            while (imageGallery.firstChild) {
+                imageGallery.removeChild(imageGallery.firstChild);
+            }
         }
         
         const imagesSection = document.getElementById('imagesSection');
         if (imagesSection) {
-            imagesSection.style.display = 'none';
+            imagesSection.classList.remove('visible');
         }
         
-        // Clear positioning with validation
+        // Clear positioning
         const positioningDiv = document.getElementById('imagePositioning');
         if (positioningDiv) {
-            positioningDiv.innerHTML = '';
+            while (positioningDiv.firstChild) {
+                positioningDiv.removeChild(positioningDiv.firstChild);
+            }
             positioningDiv.style.display = 'none';
+        }
+
+        // Hide progress
+        const progressContainer = document.getElementById('progressContainer');
+        if (progressContainer) {
+            progressContainer.classList.remove('visible');
         }
         
         updateAndClearPreviewCanvas();
+        showToast('Project reset successfully.', 'info');
     } catch (error) {
-        console.error('Error in resetProject:', error);
         // Fallback basic cleanup
         trackString = '';
         imageData = null;

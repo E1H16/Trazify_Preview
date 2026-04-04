@@ -1,0 +1,17 @@
+{
+    "name": "Trazify",
+    "short_name": "Trazify",
+    "description": "Transform images into FreeRiderHD track codes with precision and ease",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#080b10",
+    "theme_color": "#2563eb",
+    "icons": [
+        {
+            "src": "assets/TrazifyLogo.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any maskable"
+        }
+    ]
+}
