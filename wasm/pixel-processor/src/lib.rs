@@ -9,10 +9,11 @@
 
 // ─── Memory management ─────────────────────────────────────────────────────
 
-/// Allocate `size` bytes in Wasm linear memory and return the pointer.
+/// Allocate `size` zero-initialized bytes in Wasm linear memory and return the pointer.
+/// Callers must free the allocation via `wasm_dealloc` with the same size.
 #[no_mangle]
 pub extern "C" fn wasm_alloc(size: usize) -> *mut u8 {
-    let mut buf = Vec::with_capacity(size);
+    let mut buf = vec![0u8; size];
     let ptr = buf.as_mut_ptr();
     core::mem::forget(buf);
     ptr

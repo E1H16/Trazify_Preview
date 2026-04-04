@@ -262,9 +262,9 @@ self.onmessage = async function (e) {
         let totalObjects = 0;
         const totalImages = imageDataArrays.length;
 
-        // Absolute maximum objects across all images — very high because
-        // we use adaptive step to prevent runaway counts
-        const ABSOLUTE_MAX = 500000;
+        // Maximum total track objects across all images before stopping.
+        // High because adaptive step already prevents runaway counts.
+        const MAX_TOTAL_OBJECTS = 500000;
 
         // Build flat RGB array for the color palette (used by both Wasm and JS paths)
         const colorNames = colorLookup.map(c => c.name);
@@ -360,8 +360,7 @@ self.onmessage = async function (e) {
                         const trackY   = results[i + 2];
 
                         totalObjects++;
-                        if (totalObjects > ABSOLUTE_MAX) {
-                            hitMax = true;
+                        if (totalObjects > MAX_TOTAL_OBJECTS) {
                             break;
                         }
 
@@ -418,7 +417,7 @@ self.onmessage = async function (e) {
 
                         totalObjects++;
 
-                        if (totalObjects > ABSOLUTE_MAX) {
+                        if (totalObjects > MAX_TOTAL_OBJECTS) {
                             self.postMessage({ type: 'progress', percent: 100, objectCount: totalObjects, imageIndex: imgIdx, totalImages });
                             self.postMessage({ type: 'complete', code: track.code, objectCount: totalObjects });
                             return;
