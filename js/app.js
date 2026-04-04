@@ -263,12 +263,11 @@ function updateAndClearPreviewCanvas() {
     ctx.restore();
 
     // Zoom indicator (drawn outside the zoom transform)
-    const zoomCtx = previewCanvas.getContext('2d');
     const zoomText = Math.round(previewZoom * 100) + '%';
-    zoomCtx.font = '600 12px -apple-system, BlinkMacSystemFont, "Segoe UI"';
-    zoomCtx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-    zoomCtx.textAlign = 'right';
-    zoomCtx.fillText(zoomText, previewCanvas.width - 12, previewCanvas.height - 12);
+    ctx.font = '600 12px -apple-system, BlinkMacSystemFont, "Segoe UI"';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.textAlign = 'right';
+    ctx.fillText(zoomText, previewCanvas.width - 12, previewCanvas.height - 12);
 }
 
 let keysPressed = {};
@@ -734,7 +733,6 @@ function resetProject() {
         // Reset UI with element validation
         if (outputField) {
             outputField.value = '';
-            outputField.innerText = '';
         }
         const qualitySelect = document.getElementById('qualitySelect');
         if (qualitySelect) qualitySelect.value = '2';
