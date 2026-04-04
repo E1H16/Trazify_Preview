@@ -35,21 +35,23 @@ pub extern "C" fn wasm_dealloc(ptr: *mut u8, size: usize) {
 /// non-transparent pixel by closest color match (Euclidean distance in RGB space).
 ///
 /// # Arguments
-/// * `pixels_ptr`  – pointer to RGBA pixel data (`width * height * 4` bytes)
-/// * `width`       – image width in pixels
-/// * `height`      – image height in pixels
-/// * `step`        – sampling step (1 = every pixel, 2 = every other, etc.)
-/// * `y_start`     – first row to process (inclusive)
-/// * `y_end`       – last row to process (exclusive, capped at `height`)
-/// * `colors_ptr`  – pointer to RGB color palette (`num_colors * 3` bytes)
-/// * `num_colors`  – number of colors in the palette
-/// * `scale`       – image scale factor
-/// * `half_width`  – `width / 2.0`  (pre-computed for coordinate transform)
-/// * `half_height` – `height / 2.0` (pre-computed for coordinate transform)
-/// * `offset_x`    – combined X offset (`imageOffset.x + globalXOffset`)
-/// * `offset_y`    – combined Y offset (`imageOffset.y + globalYOffset`)
-/// * `result_ptr`  – pointer to output buffer (`f64` triplets: colorIdx, trackX, trackY)
-/// * `max_results` – capacity of the result buffer in triplets
+/// * `pixels_ptr`      – pointer to RGBA pixel data (`width * height * 4` bytes)
+/// * `width`           – image width in pixels
+/// * `height`          – image height in pixels
+/// * `step`            – sampling step (1 = every pixel, 2 = every other, etc.)
+/// * `y_start`         – first row to process (inclusive)
+/// * `y_end`           – last row to process (exclusive, capped at `height`)
+/// * `colors_ptr`      – pointer to RGB color palette (`num_colors * 3` bytes)
+/// * `num_colors`      – number of colors in the palette
+/// * `scale`           – image scale factor
+/// * `half_width`      – `width / 2.0`  (pre-computed for coordinate transform)
+/// * `half_height`     – `height / 2.0` (pre-computed for coordinate transform)
+/// * `offset_x`        – combined X offset (`imageOffset.x + globalXOffset`)
+/// * `offset_y`        – combined Y offset (`imageOffset.y + globalYOffset`)
+/// * `result_ptr`      – pointer to output buffer (`f64` triplets: colorIdx, trackX, trackY)
+/// * `max_results`     – capacity of the result buffer in triplets
+/// * `white_threshold` – brightness sum threshold above which pixels are skipped
+///                       (e.g. 720 means avg brightness > 240 is white, 750 means > 250)
 ///
 /// # Returns
 /// Number of classified pixels written to `result_ptr`.
@@ -70,6 +72,7 @@ pub extern "C" fn process_pixels(
     offset_y: f64,
     result_ptr: *mut f64,
     max_results: u32,
+    white_threshold: u32,
 ) -> u32 {
     let w = width as usize;
     let total_px = (width as usize) * (height as usize) * 4;
@@ -100,8 +103,8 @@ pub extern "C" fn process_pixels(
             let g = pixels[idx + 1] as i32;
             let b = pixels[idx + 2] as i32;
 
-            // Skip white-ish pixels: (r + g + b) / 3 > 240  ⟹  r + g + b > 720
-            if r + g + b > 720 {
+            // Skip white-ish pixels above the configurable brightness threshold
+            if r + g + b > white_threshold as i32 {
                 x += s;
                 continue;
             }
@@ -155,10 +158,11 @@ pub extern "C" fn process_pixels(
 /// using sparse sampling. Used for adaptive step calculation.
 ///
 /// # Arguments
-/// * `pixels_ptr`  – pointer to RGBA pixel data
-/// * `width`       – image width
-/// * `height`      – image height
-/// * `sample_step` – sampling step (clamped to min 4)
+/// * `pixels_ptr`      – pointer to RGBA pixel data
+/// * `width`           – image width
+/// * `height`          – image height
+/// * `sample_step`     – sampling step (clamped to min 4)
+/// * `white_threshold` – brightness sum threshold (e.g. 720 = avg > 240)
 ///
 /// # Returns
 /// Estimated total non-white pixel count (extrapolated from sample).
@@ -168,6 +172,7 @@ pub extern "C" fn estimate_density(
     width: u32,
     height: u32,
     sample_step: u32,
+    white_threshold: u32,
 ) -> u32 {
     let w = width as usize;
     let h = height as usize;
@@ -188,9 +193,9 @@ pub extern "C" fn estimate_density(
                 x += step;
                 continue;
             }
-            let bright =
-                (pixels[idx] as u32 + pixels[idx + 1] as u32 + pixels[idx + 2] as u32) / 3;
-            if bright <= 240 {
+            let rgbsum =
+                pixels[idx] as u32 + pixels[idx + 1] as u32 + pixels[idx + 2] as u32;
+            if rgbsum <= white_threshold {
                 non_white += 1;
             }
             x += step;

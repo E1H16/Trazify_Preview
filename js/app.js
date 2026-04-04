@@ -142,7 +142,7 @@ function init() {
     qualitySelect.id = 'qualitySelect';
     qualitySelect.style.flex = '1';
     qualitySelect.innerHTML = `
-        <option value="1">Ultra High (Slower)</option>
+        <option value="1">Ultra High (Slower, Best Detail)</option>
         <option value="2" selected>High (Balanced)</option>
         <option value="3">Medium (Faster)</option>
         <option value="4">Low (Fastest)</option>

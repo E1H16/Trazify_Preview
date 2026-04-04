@@ -213,7 +213,7 @@ function getClosestColor(r, g, b, lookup) {
 
 // ─── Quick sampling to estimate non-white pixel density ─────────────────────
 
-function estimateNonWhitePixels(imgData, sampleStep) {
+function estimateNonWhitePixels(imgData, sampleStep, whiteThreshold) {
     let nonWhite = 0;
     let sampled  = 0;
     const step = Math.max(sampleStep, 4);
@@ -223,9 +223,9 @@ function estimateNonWhitePixels(imgData, sampleStep) {
             const idx = (y * imgData.width + x) * 4;
             const a = imgData.data[idx + 3];
             if (a === 0) { sampled++; continue; }
-            const bright = (imgData.data[idx] + imgData.data[idx + 1] + imgData.data[idx + 2]) / 3;
+            const rgbSum = imgData.data[idx] + imgData.data[idx + 1] + imgData.data[idx + 2];
             sampled++;
-            if (bright <= 240) nonWhite++;
+            if (rgbSum <= whiteThreshold) nonWhite++;
         }
     }
     if (sampled === 0) return 0;
@@ -266,6 +266,11 @@ self.onmessage = async function (e) {
         // High because adaptive step already prevents runaway counts.
         const MAX_TOTAL_OBJECTS = 500000;
 
+        // Quality-dependent white-pixel brightness threshold (RGB sum).
+        // Ultra uses 750 (avg > 250) to capture subtle near-white shading;
+        // other levels use 720 (avg > 240).
+        const whiteThreshold = qualityLevel === 1 ? 750 : 720;
+
         // Build flat RGB array for the color palette (used by both Wasm and JS paths)
         const colorNames = colorLookup.map(c => c.name);
         const colorsFlat = new Uint8Array(colorLookup.length * 3);
@@ -283,13 +288,15 @@ self.onmessage = async function (e) {
             // ── Adaptive step: guarantee full image coverage ────────────
             let step = qualityLevel; // 1 = Ultra … 4 = Low
 
-            // Size-based minimum step
-            if (imgData.width > 1500 || imgData.height > 1500) step = Math.max(step, 2);
-            if (imgData.width > 3000 || imgData.height > 3000) step = Math.max(step, 3);
-            if (imgData.width > 5000 || imgData.height > 5000) step = Math.max(step, 4);
+            // Size-based minimum step — skipped for Ultra to preserve maximum detail
+            if (qualityLevel > 1) {
+                if (imgData.width > 1500 || imgData.height > 1500) step = Math.max(step, 2);
+                if (imgData.width > 3000 || imgData.height > 3000) step = Math.max(step, 3);
+                if (imgData.width > 5000 || imgData.height > 5000) step = Math.max(step, 4);
+            }
 
             // Density-based adaptive step
-            const maxBudget = [200000, 120000, 60000, 30000][qualityLevel - 1];
+            const maxBudget = [500000, 120000, 60000, 30000][qualityLevel - 1];
             const budgetRemaining = Math.max(maxBudget - totalObjects, 10000);
 
             let estimated;
@@ -298,16 +305,19 @@ self.onmessage = async function (e) {
                 const pixelSize = imgData.data.length;
                 const pxPtr = wasm.wasm_alloc(pixelSize);
                 new Uint8Array(wasm.memory.buffer, pxPtr, pixelSize).set(imgData.data);
-                estimated = wasm.estimate_density(pxPtr, imgData.width, imgData.height, step);
+                estimated = wasm.estimate_density(pxPtr, imgData.width, imgData.height, step, whiteThreshold);
                 wasm.wasm_dealloc(pxPtr, pixelSize);
             } else {
-                estimated = estimateNonWhitePixels(imgData, step);
+                estimated = estimateNonWhitePixels(imgData, step, whiteThreshold);
             }
 
-            const estAtStep = Math.ceil(estimated / (step * step));
-            if (estAtStep > budgetRemaining) {
-                const neededFactor = Math.sqrt(estAtStep / budgetRemaining);
-                step = Math.max(step, Math.ceil(step * neededFactor));
+            // Density-based step increase — skipped for Ultra to respect user's quality choice
+            if (qualityLevel > 1) {
+                const estAtStep = Math.ceil(estimated / (step * step));
+                if (estAtStep > budgetRemaining) {
+                    const neededFactor = Math.sqrt(estAtStep / budgetRemaining);
+                    step = Math.max(step, Math.ceil(step * neededFactor));
+                }
             }
 
             // Cap step so we don't skip everything
@@ -348,7 +358,8 @@ self.onmessage = async function (e) {
                         yStart, yEnd,
                         clrPtr, colorLookup.length,
                         scale, halfW, halfH, combinedOffX, combinedOffY,
-                        resPtr, maxPerBatch
+                        resPtr, maxPerBatch,
+                        whiteThreshold
                     );
 
                     // Read results — re-create view in case memory grew
@@ -410,7 +421,7 @@ self.onmessage = async function (e) {
                         const g = imgData.data[idx + 1];
                         const b = imgData.data[idx + 2];
 
-                        if ((r + g + b) / 3 > 240) continue;
+                        if ((r + g + b) > whiteThreshold) continue;
 
                         const match = getClosestColor(r, g, b, colorLookup);
                         if (!match) continue;
