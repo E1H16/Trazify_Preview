@@ -63,6 +63,7 @@ let isPinching = false;
 let currentWorker = null;
 let workerTimeout = null;
 const WORKER_TIMEOUT_MS = 120000; // 2 minutes
+const LARGE_CODE_DISPLAY_LIMIT = 200000; // Characters above which textarea display is truncated
 
 // ─── Image file validation ─────────────────────────────────────────────────
 
@@ -287,7 +288,7 @@ document.addEventListener('DOMContentLoaded', function() {
         objectsList.appendChild(label);
     }
 
-    outputField.value = trackString;
+    displayTrackCode();
     updateAndClearPreviewCanvas();
     
     // Add upload button listener
@@ -300,9 +301,11 @@ document.addEventListener('DOMContentLoaded', function() {
     var btnGenerate = document.getElementById('btnGenerate');
     var btnCopy = document.getElementById('btnCopy');
     var btnReset = document.getElementById('btnReset');
+    var btnDownload = document.getElementById('btnDownload');
     if (btnGenerate) btnGenerate.addEventListener('click', genTrackFromImageData);
     if (btnCopy) btnCopy.addEventListener('click', copyToClipboard);
     if (btnReset) btnReset.addEventListener('click', resetProject);
+    if (btnDownload) btnDownload.addEventListener('click', downloadTrackCode);
 });
 
 // ─── Canvas rendering ───────────────────────────────────────────────────────
@@ -445,6 +448,55 @@ function copyToClipboard() {
         .catch(function() {
             showToast('Copy failed. Try manually copying instead.', 'error');
         });
+}
+
+/**
+ * Displays track code in the output textarea, truncating if too large to avoid freezing the browser.
+ * @param {number} [objectCount] - Number of objects generated (omit for raw display)
+ */
+function displayTrackCode(objectCount) {
+    var header = objectCount != null ? 'Track Generated!\nTotal Objects: ' + objectCount + '\n\n' : '';
+    if (trackString.length > LARGE_CODE_DISPLAY_LIMIT) {
+        var preview = trackString.substring(0, LARGE_CODE_DISPLAY_LIMIT);
+        outputField.value = header + preview +
+            '\n\n--- Track code truncated for display (' + trackString.length.toLocaleString() + ' characters total) ---' +
+            '\nUse the Copy or Download button to get the full code.';
+    } else {
+        outputField.value = header + trackString;
+    }
+    updateDownloadButton();
+}
+
+/**
+ * Downloads the current track code as a text file.
+ */
+function downloadTrackCode() {
+    if (!trackString) {
+        showToast('No track code to download. Generate one first.', 'warning');
+        return;
+    }
+    var blob = new Blob([trackString], { type: 'text/plain' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'trazify-track.txt';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function() {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }, 100);
+    showToast('Track code downloaded!', 'success');
+}
+
+/**
+ * Shows or hides the download button based on whether a track code exists.
+ */
+function updateDownloadButton() {
+    var btnDownload = document.getElementById('btnDownload');
+    if (btnDownload) {
+        btnDownload.style.display = trackString ? '' : 'none';
+    }
 }
 
 // ─── Image upload and management ────────────────────────────────────────────
@@ -845,7 +897,7 @@ function genTrackFromImageData() {
             clearTimeout(workerTimeout);
             workerTimeout = null;
             trackString = msg.code;
-            outputField.value = 'Track Generated!\nTotal Objects: ' + msg.objectCount + '\n\n' + trackString;
+            displayTrackCode(msg.objectCount);
             btnGenerate.textContent = originalText;
             btnGenerate.disabled = false;
             progressBarFill.style.width = '100%';
@@ -911,6 +963,7 @@ function resetProject() {
         if (outputField) {
             outputField.value = '';
         }
+        updateDownloadButton();
         const qualitySelect = document.getElementById('qualitySelect');
         if (qualitySelect) qualitySelect.value = '2';
         
