@@ -104,7 +104,7 @@ pub extern "C" fn process_pixels(
             let b = pixels[idx + 2] as i32;
 
             // Skip white-ish pixels above the configurable brightness threshold
-            if (r + g + b) as u32 > white_threshold {
+            if r + g + b > white_threshold as i32 {
                 x += s;
                 continue;
             }
@@ -193,9 +193,9 @@ pub extern "C" fn estimate_density(
                 x += step;
                 continue;
             }
-            let bright =
-                (pixels[idx] as u32 + pixels[idx + 1] as u32 + pixels[idx + 2] as u32) / 3;
-            if bright <= white_threshold / 3 {
+            let rgbsum =
+                pixels[idx] as u32 + pixels[idx + 1] as u32 + pixels[idx + 2] as u32;
+            if rgbsum <= white_threshold {
                 non_white += 1;
             }
             x += step;

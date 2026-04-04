@@ -217,16 +217,15 @@ function estimateNonWhitePixels(imgData, sampleStep, whiteThreshold) {
     let nonWhite = 0;
     let sampled  = 0;
     const step = Math.max(sampleStep, 4);
-    const brightLimit = whiteThreshold / 3;
 
     for (let y = 0; y < imgData.height; y += step) {
         for (let x = 0; x < imgData.width; x += step) {
             const idx = (y * imgData.width + x) * 4;
             const a = imgData.data[idx + 3];
             if (a === 0) { sampled++; continue; }
-            const bright = (imgData.data[idx] + imgData.data[idx + 1] + imgData.data[idx + 2]) / 3;
+            const rgbSum = imgData.data[idx] + imgData.data[idx + 1] + imgData.data[idx + 2];
             sampled++;
-            if (bright <= brightLimit) nonWhite++;
+            if (rgbSum <= whiteThreshold) nonWhite++;
         }
     }
     if (sampled === 0) return 0;
