@@ -24,7 +24,7 @@ const colorMap = {
 
 let trackString = '';
 let imageData = null;
-let loadedImages = [];   // {blob, name, objectUrl}
+let loadedImages = [];   // {src, name, objectUrl, isSvg}
 let imageObjects = [];   // Image objects for rendering
 let imageOffsets = [];    // [{x, y}, ...] for each image
 let imageScales = [];     // [1.0, 0.5, ...] scale per image
@@ -79,17 +79,42 @@ const IMAGE_SIGNATURES = [
 const WEBP_RIFF_HEADER = [0x52, 0x49, 0x46, 0x46];
 const WEBP_MARKER = [0x57, 0x45, 0x42, 0x50]; // 'WEBP' at offset 8
 
+/** Maximum canvas dimension when rendering SVGs at scaled resolution */
+const SVG_MAX_RENDER_DIM = 8192;
+
 /**
- * Validates an image file by checking its magic bytes.
+ * Checks whether a file is an SVG by reading its first bytes as text
+ * and looking for an `<svg` tag. SVGs loaded via <img> are sandboxed
+ * (no script execution), so this is safe.
+ * @param {File} file - The file to check
+ * @returns {Promise<boolean>} Whether the file appears to be a valid SVG
+ */
+function isSvgFile(file) {
+    return new Promise(function(resolve) {
+        // SVG files are XML text; check the first 1 KB for an <svg tag
+        var reader = new FileReader();
+        reader.onload = function(e) {
+            var text = e.target.result;
+            resolve(/<svg[\s>/]/i.test(text));
+        };
+        reader.onerror = function() {
+            resolve(false);
+        };
+        reader.readAsText(file.slice(0, 1024));
+    });
+}
+
+/**
+ * Validates an image file by checking its magic bytes (raster) or XML content (SVG).
  * @param {File} file - The file to validate
- * @returns {Promise<boolean>} Whether the file has valid image magic bytes
+ * @returns {Promise<{valid: boolean, isSvg: boolean}>} Validation result
  */
 function validateImageFile(file) {
     return new Promise(function(resolve) {
         var reader = new FileReader();
         reader.onload = function(e) {
             var arr = new Uint8Array(e.target.result);
-            // Check standard signatures
+            // Check standard raster signatures
             var isValid = IMAGE_SIGNATURES.some(function(sig) {
                 return sig.bytes.every(function(byte, i) {
                     return arr[i] === byte;
@@ -101,10 +126,17 @@ function validateImageFile(file) {
                 var isWebp = WEBP_MARKER.every(function(byte, i) { return arr[8 + i] === byte; });
                 isValid = isRiff && isWebp;
             }
-            resolve(isValid);
+            if (isValid) {
+                resolve({ valid: true, isSvg: false });
+            } else {
+                // Not a recognised raster format — check for SVG
+                isSvgFile(file).then(function(svg) {
+                    resolve({ valid: svg, isSvg: svg });
+                });
+            }
         };
         reader.onerror = function() {
-            resolve(false);
+            resolve({ valid: false, isSvg: false });
         };
         reader.readAsArrayBuffer(file.slice(0, 12));
     });
@@ -522,9 +554,9 @@ async function handleImageUpload(event) {
     for (let i = 0; i < filesToProcess.length; i++) {
         const file = filesToProcess[i];
         try {
-            const isValid = await validateImageFile(file);
-            if (isValid) {
-                validFiles.push({ file: file, index: i });
+            const result = await validateImageFile(file);
+            if (result.valid) {
+                validFiles.push({ file: file, index: i, isSvg: result.isSvg });
             } else {
                 showToast('Invalid image file: ' + file.name, 'error');
             }
@@ -556,7 +588,8 @@ async function handleImageUpload(event) {
         loadedImages[idx] = {
             src: objectUrl,
             name: file.name,
-            objectUrl: objectUrl
+            objectUrl: objectUrl,
+            isSvg: item.isSvg || false
         };
         imageOffsets[idx] = { x: 0, y: 0 };
         imageScales[idx] = 1.0;
@@ -830,17 +863,37 @@ function genTrackFromImageData() {
 
     outputField.value = 'Generating track code...\n\nQuality: ' + ['Ultra High', 'High', 'Medium', 'Low'][qualityLevel - 1];
 
-    // Build image data arrays to send to worker, using Transferable Objects
+    // Build image data arrays to send to worker, using Transferable Objects.
+    // For SVG images with scale > 1, render at the target resolution so the
+    // browser rasterises vectors at full quality instead of upscaling raster pixels.
     const imageDataArrays = [];
     const transferables = [];
+    const effectiveScales = [];
     for (let i = 0; i < imageObjects.length; i++) {
         const imgObj = imageObjects[i];
+        const scale  = imageScales[i] || 1.0;
+        const isSvg  = loadedImages[i] && loadedImages[i].isSvg;
+
         const canvas = document.createElement('canvas');
         const ctx    = canvas.getContext('2d');
-        canvas.width  = imgObj.width;
-        canvas.height = imgObj.height;
-        ctx.drawImage(imgObj, 0, 0);
-        const imgDataObj = ctx.getImageData(0, 0, imgObj.width, imgObj.height);
+
+        if (isSvg && scale > 1) {
+            // Render the SVG at the scaled resolution (capped for safety)
+            const renderW = Math.min(Math.round(imgObj.width  * scale), SVG_MAX_RENDER_DIM);
+            const renderH = Math.min(Math.round(imgObj.height * scale), SVG_MAX_RENDER_DIM);
+            canvas.width  = renderW;
+            canvas.height = renderH;
+            ctx.drawImage(imgObj, 0, 0, renderW, renderH);
+            // Scale already baked into resolution — tell the worker to use 1×
+            effectiveScales.push(1.0);
+        } else {
+            canvas.width  = imgObj.width;
+            canvas.height = imgObj.height;
+            ctx.drawImage(imgObj, 0, 0);
+            effectiveScales.push(scale);
+        }
+
+        const imgDataObj = ctx.getImageData(0, 0, canvas.width, canvas.height);
         imageDataArrays.push({
             data:   imgDataObj.data,
             width:  imgDataObj.width,
@@ -871,7 +924,7 @@ function genTrackFromImageData() {
         enabledColors:   enabledColors,
         qualityLevel:    qualityLevel,
         imageOffsets:    imageOffsets,
-        imageScales:     imageScales,
+        imageScales:     effectiveScales,
         xOffset:         xOffset,
         yOffset:         yOffset
     };
