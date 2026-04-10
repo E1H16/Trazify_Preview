@@ -1,7 +1,7 @@
 /**
  * Web Worker for track generation — runs off the main thread to prevent UI freezing.
  *
- * Receives: { imageDataArrays, colorMap, enabledColors, qualityLevel, imageOffsets, imageScales, xOffset, yOffset }
+ * Receives: { imageDataArrays, colorMap, enabledColors, qualityLevel, imageOffsets, imageScales, xOffset, yOffset, lineThickness }
  *   - imageDataArrays: [{ data: Uint8ClampedArray, width, height }, ...]
  * Posts back:
  *   - { type: 'progress', percent, objectCount, imageIndex, totalImages }
@@ -249,8 +249,13 @@ self.onmessage = async function (e) {
             imageOffsets,
             imageScales,
             xOffset,
-            yOffset
+            yOffset,
+            lineThickness
         } = e.data;
+
+        // Sanitize line thickness (default to 2 if invalid)
+        const thickness = (typeof lineThickness === 'number' && lineThickness >= 1 && lineThickness <= 4)
+            ? Math.round(lineThickness) : 2;
 
         const colorLookup = buildColorLookup(colorMap, enabledColors);
         if (colorLookup.length === 0) {
@@ -376,7 +381,7 @@ self.onmessage = async function (e) {
                             break;
                         }
 
-                        addResultToTrack(track, colorNames[colorIdx], trackX, trackY);
+                        addResultToTrack(track, colorNames[colorIdx], trackX, trackY, thickness);
                     }
 
                     // Progress reporting
@@ -438,7 +443,7 @@ self.onmessage = async function (e) {
                         const trackX = ((x - imgData.width / 2) * scale + offset.x + xOffset) * 2;
                         const trackY = ((y - imgData.height / 2) * scale + offset.y + yOffset) * 2;
 
-                        addResultToTrack(track, match.name, trackX, trackY);
+                        addResultToTrack(track, match.name, trackX, trackY, thickness);
                     }
 
                     rowsDone++;
@@ -468,14 +473,14 @@ self.onmessage = async function (e) {
 
 // ─── Shared helper: add a classified pixel to the track ─────────────────────
 
-function addResultToTrack(track, colorName, trackX, trackY) {
+function addResultToTrack(track, colorName, trackX, trackY, thickness) {
     switch (colorName) {
         case 'White (Strongly recommended)': break;
         case 'PhysicsLine':
-            track.addPhysicsLine(trackX, trackY, trackX + 2, trackY + 2);
+            track.addPhysicsLine(trackX, trackY, trackX + thickness, trackY + thickness);
             break;
         case 'SceneryLine':
-            track.addSceneryLine(trackX, trackY, trackX + 2, trackY + 2);
+            track.addSceneryLine(trackX, trackY, trackX + thickness, trackY + thickness);
             break;
         case 'Bomb':          track.addBomb(trackX, trackY);          break;
         case 'Gravity':       track.addGravity(trackX, trackY);       break;
@@ -484,7 +489,7 @@ function addResultToTrack(track, colorName, trackX, trackY) {
         case 'Antigravity':   track.addAntigravity(trackX, trackY);   break;
         case 'Checkpoint':    track.addCheckpoint(trackX, trackY);    break;
         case 'Teleporter':
-            track.addTeleporter(trackX, trackY, trackX + 2, trackY + 2);
+            track.addTeleporter(trackX, trackY, trackX + thickness, trackY + thickness);
             break;
         case 'Helicopter':    track.addVehicle(trackX, trackY, 'heli');    break;
         case 'Truck':         track.addVehicle(trackX, trackY, 'truck');   break;

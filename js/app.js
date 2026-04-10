@@ -35,6 +35,7 @@ let xOffset = 0;
 let yOffset = 0;
 let previewZoom = 1;
 let qualityLevel = 2;   // 1=Ultra, 2=High, 3=Medium, 4=Low
+let lineThickness = 2;  // Line segment size (1=thinner, 2=default, 3-4=thicker)
 const enabledColors = {
     '#FFFFFF': false,
     '#0C0C0C': false,
@@ -303,9 +304,21 @@ document.addEventListener('DOMContentLoaded', function() {
     qualityLabel.appendChild(qualitySelect);
     generalSettings.appendChild(qualityLabel);
 
+    // Colors that should be hidden from the UI (Bomb through Teleporter)
+    const hiddenColors = new Set([
+        '#C7231D', // Bomb
+        '#346BB8', // Gravity
+        '#FBE615', // Star
+        '#8DCC28', // Boost
+        '#07FAF3', // Antigravity
+        '#776FE1', // Checkpoint
+        '#DC45EC', // Teleporter
+    ]);
+
     // Add objects list
     const objectsList = document.getElementById('objectsList');
     for (const color in colorMap) {
+        if (hiddenColors.has(color)) continue;
         const label = document.createElement('label');
         const span = document.createElement('span');
         span.textContent = colorMap[color];
@@ -319,6 +332,35 @@ document.addEventListener('DOMContentLoaded', function() {
         label.appendChild(input);
         objectsList.appendChild(label);
     }
+
+    // Add line thickness slider (engrosador / adelgazador)
+    const thicknessLabel = document.createElement('label');
+    thicknessLabel.style.display = 'flex';
+    thicknessLabel.style.alignItems = 'center';
+    thicknessLabel.style.gap = '0.618rem';
+    const thicknessSpan = document.createElement('span');
+    thicknessSpan.textContent = 'Line Thickness: ';
+    const thicknessSlider = document.createElement('input');
+    thicknessSlider.type = 'range';
+    thicknessSlider.id = 'lineThicknessSlider';
+    thicknessSlider.min = '1';
+    thicknessSlider.max = '4';
+    thicknessSlider.step = '1';
+    thicknessSlider.value = String(lineThickness);
+    thicknessSlider.style.flex = '1';
+    thicknessSlider.setAttribute('aria-label', 'Line thickness');
+    const thicknessValue = document.createElement('span');
+    thicknessValue.id = 'lineThicknessValue';
+    thicknessValue.textContent = lineThickness + 'px';
+    thicknessValue.className = 'image-scale-value';
+    thicknessSlider.addEventListener('input', function() {
+        lineThickness = parseInt(thicknessSlider.value, 10);
+        thicknessValue.textContent = lineThickness + 'px';
+    });
+    thicknessLabel.appendChild(thicknessSpan);
+    thicknessLabel.appendChild(thicknessSlider);
+    thicknessLabel.appendChild(thicknessValue);
+    generalSettings.appendChild(thicknessLabel);
 
     displayTrackCode();
     updateAndClearPreviewCanvas();
@@ -926,7 +968,8 @@ function genTrackFromImageData() {
         imageOffsets:    imageOffsets,
         imageScales:     effectiveScales,
         xOffset:         xOffset,
-        yOffset:         yOffset
+        yOffset:         yOffset,
+        lineThickness:   lineThickness
     };
 
     // Use Transferable Objects for better performance
@@ -1011,6 +1054,7 @@ function resetProject() {
         yOffset = 0;
         previewZoom = 1;
         qualityLevel = 2;
+        lineThickness = 2;
         
         // Reset UI
         if (outputField) {
@@ -1019,6 +1063,10 @@ function resetProject() {
         updateDownloadButton();
         const qualitySelect = document.getElementById('qualitySelect');
         if (qualitySelect) qualitySelect.value = '2';
+        const thicknessSliderEl = document.getElementById('lineThicknessSlider');
+        const thicknessValueEl = document.getElementById('lineThicknessValue');
+        if (thicknessSliderEl) thicknessSliderEl.value = '2';
+        if (thicknessValueEl) thicknessValueEl.textContent = '2px';
         
         const uploadBtn = document.getElementById('uploadButton');
         if (uploadBtn) uploadBtn.value = '';
