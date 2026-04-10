@@ -253,9 +253,13 @@ self.onmessage = async function (e) {
             lineThickness
         } = e.data;
 
-        // Sanitize line thickness (default to 2 if invalid)
+        // Sanitize line thickness (default to 2 if invalid).
+        // Minimum is 2: with thickness=1 the endpoint offset (dx=1, dy=1) is smaller than
+        // the coordinate step between adjacent pixels (step*2 ≥ 2), so no line segments
+        // merge into polylines.  The result is millions of disconnected √2-unit dashes that
+        // are invisible in FRHD or exceed its import limit, producing a blank track.
         const thickness = (typeof lineThickness === 'number' && lineThickness >= 1 && lineThickness <= 4)
-            ? Math.round(lineThickness) : 2;
+            ? Math.max(Math.round(lineThickness), 2) : 2;
 
         const colorLookup = buildColorLookup(colorMap, enabledColors);
         if (colorLookup.length === 0) {

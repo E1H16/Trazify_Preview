@@ -35,7 +35,7 @@ let xOffset = 0;
 let yOffset = 0;
 let previewZoom = 1;
 let qualityLevel = 2;   // 1=Ultra, 2=High, 3=Medium, 4=Low
-let lineThickness = 2;  // Line segment size (1=thinner, 2=default, 3-4=thicker)
+let lineThickness = 2;  // Line segment size (2=default, 3-4=thicker)
 const enabledColors = {
     '#FFFFFF': false,
     '#0C0C0C': false,
@@ -343,7 +343,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const thicknessSlider = document.createElement('input');
     thicknessSlider.type = 'range';
     thicknessSlider.id = 'lineThicknessSlider';
-    thicknessSlider.min = '1';
+    thicknessSlider.min = '2';
     thicknessSlider.max = '4';
     thicknessSlider.step = '1';
     thicknessSlider.value = String(lineThickness);
